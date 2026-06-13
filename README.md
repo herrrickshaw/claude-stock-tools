@@ -120,7 +120,8 @@ claude-stock-tools/
 │   ├── us_market_scan.py            Full NYSE+NASDAQ universe (~5,400 stocks)
 │   ├── europe_market_scan.py        17 European exchanges (~1,700 stocks)
 │   ├── japan_market_scan.py         TSE Prime+Standard (~3,600 stocks)
-│   └── korea_market_scan.py         KOSPI+KOSDAQ (~2,600 stocks)
+│   ├── korea_market_scan.py         KOSPI+KOSDAQ (~2,600 stocks)
+│   └── buffett_value_screener.py    Buffett-style quality+value across all markets
 │
 ├── 03_colab_notebooks/
 │   ├── india_stock_analysis.ipynb   NSE+BSE analysis notebook
@@ -129,10 +130,12 @@ claude-stock-tools/
 │   └── us_stocks_colab_script.py    Combined Colab-compatible script
 │
 ├── 04_strategy_reference/
-│   └── momentum_strategy_reference.py  India momentum strategy card
+│   ├── momentum_strategy_reference.py  India momentum strategy card
+│   └── buffett_methodology.md          Buffett principles, moats, valuation
 │
 ├── 05_enrichment/
-│   └── damodaran_enrichment.py     Post-scan enrichment with NYU Stern benchmarks
+│   ├── damodaran_enrichment.py        Sector benchmarks + country risk premiums
+│   └── moat_analyzer.py               Competitive advantage strength rating
 │
 └── CHANGELOG.md
 ```
@@ -194,6 +197,30 @@ python 02_market_screeners/korea_market_scan.py --kospi-only
 
 ---
 
+## 03b · Buffett Value Screener
+
+Warren Buffett-style stock picker using four gates: financial fortress, durable moat, rational management, and valuation discipline. Unlike Darvas (technical), this focuses on long-term compounding quality.
+
+**Gates:**
+- **Fortress** — ROE ≥15%, debt/equity ≤0.5, gross margin ≥30%, FCF yield ≥5%
+- **Moat** — Margin stability ≥85%, profitable every year for 5 years
+- **Valuation** — PE ≤20, discount to fair value ≥25% (margin of safety)
+- **Output** — Ranked by quality×discount score (best moat at best price)
+
+```bash
+# Screen all markets (US, Europe, India, Japan, Korea)
+python 02_market_screeners/buffett_value_screener.py --market all --workers 8
+
+# Screen single market with custom limits
+python 02_market_screeners/buffett_value_screener.py --market us --limit 500
+
+# Output: buffett_value_scan_YYYY-MM-DD.xlsx with all screens + passes
+```
+
+See [Buffett Methodology](04_strategy_reference/buffett_methodology.md) for detailed principles, moat types, and comparison to Darvas/Piotroski/Coffee Can.
+
+---
+
 ## 03 · Colab notebooks
 
 Open directly in Google Colab — no local Python install needed.
@@ -206,20 +233,13 @@ Open directly in Google Colab — no local Python install needed.
 
 ---
 
-## 05 · Damodaran enrichment
+## 05 · Enrichment
 
-After a screener run, enrich the Triple Hits sheet with sector-level valuation benchmarks and country risk data from [Aswath Damodaran's NYU Stern dataset archive](https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datacurrent.html) (January/April 2026 vintage).
+Post-screening analysis tools to evaluate quality, moats, and valuations.
 
-**Columns added:**
+### Damodaran sector benchmarks
 
-| Column | Source |
-|---|---|
-| `Sector_PE_Trailing` | How does the stock's PE compare to its sector median? |
-| `Sector_EV_EBITDA` | Sector median EV/EBITDA — is the stock cheap or expensive relative to peers? |
-| `Sector_ROE` / `Sector_ROIC` | Sector average returns — context for the 15% ROCE threshold |
-| `Sector_Net_Margin` | Sector median net margin |
-| `Country_ERP_pct` | Total equity risk premium for the country (Moody's-based, %) |
-| `Country_CRP_pct` | Country risk premium above the mature market baseline |
+Enriches screener output with sector-level valuation benchmarks and country risk data from [Aswath Damodaran's NYU Stern dataset archive](https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datacurrent.html) (January/April 2026 vintage).
 
 ```bash
 # Enrich a scanner output
@@ -229,12 +249,22 @@ python 05_enrichment/damodaran_enrichment.py \
     --market europe \
     --country-col Country \
     --pe-col PE
-
-# Preview the benchmark tables without processing a file
-python 05_enrichment/damodaran_enrichment.py --market global --preview
 ```
 
-Data is cached locally for 24 hours. Supports markets: `us`, `europe`, `japan`, `india`, `emerging`, `global`.
+**Columns added:** Sector PE/EV/EBITDA/ROE/margins + Country ERP premiums. Data cached for 24h.
+
+### Moat analyzer
+
+Evaluates competitive advantage strength for identified picks using five indicators: margin stability (pricing power), ROE consistency, market dominance, asset efficiency, dividend policy. Rates moats 1-5 stars.
+
+```bash
+# Analyze moat for a single ticker
+python 05_enrichment/moat_analyzer.py MSFT
+
+# Output: Moat strength rating, type signals, and detailed explanations
+```
+
+Example output: "Asset-light model (5★). Margin rock-solid (5★). Consistent ROE >20% (5★). → STRONG MOAT"
 
 ---
 

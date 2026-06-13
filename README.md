@@ -12,6 +12,7 @@ claude-stock-tools/
 ├── 02_market_screeners/     Full-universe screeners (India, US, Europe, Japan, Korea)
 ├── 03_colab_notebooks/      Google Colab notebooks — run without local Python
 ├── 04_strategy_reference/   Strategy docs, quick-reference cards
+├── 05_enrichment/           Damodaran sector/country benchmarks for triple-hits
 └── CHANGELOG.md             Chronological history of all additions
 ```
 
@@ -42,7 +43,7 @@ Full-universe scanners. Batch-downloads OHLC for every listed stock, applies Dar
 |---|---|---|---|
 | `india_market_scan.py` | NSE + BSE | ~4,600 | nsepython + bseindia + yfinance |
 | `us_market_scan.py` | NYSE + NASDAQ | ~5,400 | yfinance |
-| `europe_market_scan.py` | Euro Stoxx 50 | 50 | yfinance |
+| `europe_market_scan.py` | 17 European exchanges | ~1,700 | yfinance |
 | `japan_market_scan.py` | TSE Prime + Standard | ~3,600 | kabupy + yfinance |
 | `korea_market_scan.py` | KOSPI + KOSDAQ | ~2,600 | pykrx + yfinance |
 
@@ -63,6 +64,26 @@ Open directly in Google Colab — no local install needed.
 | `india_stock_analysis.ipynb` | NSE + BSE | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/herrrickshaw/claude-stock-tools/blob/main/03_colab_notebooks/india_stock_analysis.ipynb) |
 | `india_stock_reporting.ipynb` | NSE + BSE | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/herrrickshaw/claude-stock-tools/blob/main/03_colab_notebooks/india_stock_reporting.ipynb) |
 | `us_market_screener.ipynb` | NYSE + NASDAQ | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/herrrickshaw/claude-stock-tools/blob/main/03_colab_notebooks/us_market_screener.ipynb) |
+
+---
+
+## 05 · Enrichment
+
+Enriches any scanner's triple-hits output with Damodaran sector benchmarks and country risk premiums downloaded from NYU Stern.
+
+| Script | What it adds |
+|---|---|
+| `damodaran_enrichment.py` | Sector PE / EV/EBITDA / ROE / margins + Country ERP by Moody's rating |
+
+```bash
+# Enrich an existing scan output
+python 05_enrichment/damodaran_enrichment.py \
+    --file Downloads/europe_scan.xlsx --sheet "Triple Hits" \
+    --market europe --country-col Country --pe-col PE
+
+# Preview what the Damodaran tables contain
+python 05_enrichment/damodaran_enrichment.py --market global --preview
+```
 
 ---
 

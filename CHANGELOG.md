@@ -4,6 +4,30 @@ All tools built with Claude, in reverse chronological order.
 
 ---
 
+## 13 Jun 2026 (continued)
+
+### Added — Damodaran enrichment module
+- `05_enrichment/damodaran_enrichment.py`
+  - Downloads and caches 5 datasets from NYU Stern (Jan/Apr 2026 vintage):
+    - PE Ratios by Sector (global + market-specific)
+    - EV/EBITDA by Sector
+    - Price/Book and ROE/ROIC by Sector
+    - Profit Margins by Sector (net, EBITDA, gross, operating)
+    - Country Equity Risk Premiums (Moodys-rated, Apr 2026)
+  - `enrich_triple_hits(df, market)` — importable function for any scanner
+  - CLI mode: `--file scan.xlsx --sheet "Triple Hits"` enriches in-place
+  - `--preview` to inspect downloaded tables without processing a file
+  - 24-hour local CSV cache to avoid repeated NYU server hits
+  - Fuzzy sector matching (exact → substring) to bridge GICS vs Damodaran names
+
+### Upgraded — Europe scanner to full 1,704-stock universe
+- `02_market_screeners/europe_market_scan.py`
+  - Replaced static 50-stock Euro Stoxx 50 with dynamic universe loader
+  - Source: `EU_All_Listed_Companies_Full_Jun2026.xlsx` (Database sheet)
+  - 1,704 stocks across 17 exchanges (Euronext, Xetra, BME, Nasdaq Nordic, etc.)
+  - New CLI flags: `--min-cap`, `--exchange`, `--universe-file`
+  - Fallback: companiesmarketcap.com live CSV
+
 ## 13 Jun 2026
 
 ### Added — Japan & Korea market scanners

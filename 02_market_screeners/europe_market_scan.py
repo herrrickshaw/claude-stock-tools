@@ -265,6 +265,13 @@ def compute_darvas_box(df, confirm=DARVAS_CONFIRM):
     if df is None or df.empty or len(df) < confirm + 5:
         return {"signal": "INSUFFICIENT_DATA", "box_top": None, "box_bottom": None}
 
+    # A missing or zero close is not a price: drop the bar, never zero-fill it
+    # (a 0.0 "current price" reads as BREAKDOWN_SELL for the whole universe).
+    _close = pd.to_numeric(df["Close"], errors="coerce")
+    df = df[_close.notna() & (_close > 0)]
+    if len(df) < confirm + 5:
+        return {"signal": "INSUFFICIENT_DATA", "box_top": None, "box_bottom": None}
+
     highs  = pd.to_numeric(df["High"],  errors="coerce").fillna(0).tolist()
     lows   = pd.to_numeric(df["Low"],   errors="coerce").fillna(0).tolist()
     closes = pd.to_numeric(df["Close"], errors="coerce").fillna(0).tolist()

@@ -402,6 +402,16 @@ def fundamental_scan(symbol: str, yf_suffix: str = ".NS") -> dict:
     ni_s = series(inc, "Net Income")
     c["C5"] = 1 if (ni_s and all(n > 0 for n in ni_s)) else 0
 
+    # C6: positive free cash flow in the most recent year (README criterion 6;
+    # same rule as the JP/KR/EU/US scanners)
+    fcf_s = series(cf, "Free Cash Flow")
+    if fcf_s:
+        c["C6"] = 1 if fcf_s[0] > 0 else 0
+    else:
+        ocf_s   = series(cf, "Operating Cash Flow")
+        capex_s = series(cf, "Capital Expenditure")
+        c["C6"] = 1 if (ocf_s and capex_s and (ocf_s[0] - abs(capex_s[0])) > 0) else 0
+
     cc_total  = sum(c.values())
     qualifies = cc_total == len(c)
     return {

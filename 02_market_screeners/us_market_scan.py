@@ -487,7 +487,7 @@ def fundamental_scan(symbol: str) -> dict:
     f6 = 1 if (ca0 and cl0 and ca1 and cl1 and (ca0/cl0) > (ca1/cl1)) else 0
 
     sh0 = _row(bal, "Share Issued", col=0);  sh1 = _row(bal, "Share Issued", col=1)
-    f7 = (1 if sh0 <= sh1 else 0) if (sh0 and sh1) else 1
+    f7 = (1 if sh0 <= sh1 else 0) if (sh0 and sh1) else 0   # no share data: no point
 
     rev0 = _row(inc, "Total Revenue", col=0);  gp0 = _row(inc, "Gross Profit", col=0)
     rev1 = _row(inc, "Total Revenue", col=1);  gp1 = _row(inc, "Gross Profit", col=1)

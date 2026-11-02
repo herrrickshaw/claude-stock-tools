@@ -1,0 +1,13 @@
+{
+ "cc_debt_equity": 0.07,
+ "cc_qualifies": "PASS",
+ "cc_rev_cagr": 16.96,
+ "cc_roce_avg": 17.87,
+ "cc_score": "6/6",
+ "code": "005930",
+ "error": null,
+ "f_score": 9,
+ "f_strong": true,
+ "market_cap_b_krw": 50000.0,
+ "yf_ticker": "005930.KS"
+}

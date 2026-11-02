@@ -1,0 +1,12 @@
+{
+ "cc_debt_equity": 0.07,
+ "cc_qualifies": "FAIL",
+ "cc_rev_cagr": 16.96,
+ "cc_roce_avg": 17.87,
+ "cc_score": "5/6",
+ "error": null,
+ "f_score": 7,
+ "f_strong": true,
+ "market_cap_b": 5000.0,
+ "ticker": "ASML.AS"
+}

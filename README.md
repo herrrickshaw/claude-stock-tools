@@ -72,7 +72,7 @@ from `~/.nasdaq/ncds_auth.json` if present. Per-market extras: `nsepython`+`bsei
 ## Testing
 ```bash
 pip install pytest ruff
-pytest -q        # 42 offline tests, golden files in tests/golden
+pytest -q        # 43 offline tests, golden files in tests/golden
 ruff check .
 ```
 

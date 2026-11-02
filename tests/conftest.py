@@ -10,6 +10,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 SCREENERS = REPO / "02_market_screeners"
+sys.path.insert(0, str(SCREENERS))  # lets tests import scan_common directly
 SCANNERS = ("india", "us", "europe", "japan", "korea")
 
 

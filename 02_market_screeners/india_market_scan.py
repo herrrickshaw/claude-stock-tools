@@ -35,6 +35,9 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+from scan_common import (  # sibling module; the script dir is on sys.path
+    first_df as _first_df, piotroski_f_score, read_cache, write_cache,
+)
 
 try:
     from nsepython import get_bhavcopy as _nse_get_bhavcopy
@@ -66,27 +69,18 @@ SYMBOL_CACHE_TTL  = 86400 # seconds — refresh symbol lists once per day
 
 
 # ── Symbol list caching ────────────────────────────────────────────────────────
-import json as _json
-
 _SYMBOL_CACHE = DOWNLOAD_DIR / ".symbols_cache.json"
 
 
 def _load_symbol_cache():
-    try:
-        if _SYMBOL_CACHE.exists():
-            data = _json.loads(_SYMBOL_CACHE.read_text())
-            if time.time() - data.get("ts", 0) < SYMBOL_CACHE_TTL:
-                return data.get("nse", []), data.get("bse_only", [])
-    except Exception:
-        pass
+    data = read_cache(_SYMBOL_CACHE, SYMBOL_CACHE_TTL)
+    if data is not None:
+        return data.get("nse", []), data.get("bse_only", [])
     return None, None
 
 
 def _save_symbol_cache(nse_syms, bse_syms):
-    try:
-        _SYMBOL_CACHE.write_text(_json.dumps({"ts": time.time(), "nse": nse_syms, "bse_only": bse_syms}))
-    except Exception:
-        pass
+    write_cache(_SYMBOL_CACHE, nse=nse_syms, bse_only=bse_syms)
 
 
 # ── Symbol fetch ───────────────────────────────────────────────────────────────
@@ -284,26 +278,6 @@ def compute_darvas_box(df: pd.DataFrame, confirm: int = DARVAS_CONFIRM) -> dict:
 
 # ── Piotroski F-Score ─────────────────────────────────────────────────────────
 
-def _first_df(ticker, *attrs):
-    for attr in attrs:
-        df = getattr(ticker, attr, None)
-        if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
-            return df
-    return None
-
-
-def _row(df, *row_names, col: int = 0):
-    if df is None or df.empty:
-        return None
-    for name in row_names:
-        if name in df.index:
-            try:
-                val = df.loc[name].iloc[col]
-                return float(val) if pd.notna(val) else None
-            except Exception:
-                pass
-    return None
-
 
 def fundamental_scan(symbol: str, yf_suffix: str = ".NS") -> dict:
     """
@@ -322,37 +296,7 @@ def fundamental_scan(symbol: str, yf_suffix: str = ".NS") -> dict:
         return {"symbol": symbol, "f_score": None, "qualifies": False, "error": str(e)}
 
     # ── Piotroski F-Score ─────────────────────────────────────────────────────
-    ni0 = _row(inc, "Net Income", col=0);  a0 = _row(bal, "Total Assets", col=0)
-    ni1 = _row(inc, "Net Income", col=1);  a1 = _row(bal, "Total Assets", col=1)
-    roa0 = (ni0 / a0) if (ni0 and a0) else None
-    roa1 = (ni1 / a1) if (ni1 and a1) else None
-    ocf0 = _row(cf, "Operating Cash Flow", "Total Cash From Operating Activities")
-
-    f1 = 1 if (roa0 and roa0 > 0) else 0
-    f2 = 1 if (ocf0 and ocf0 > 0) else 0
-    f3 = 1 if (roa0 and roa1 and roa0 > roa1) else 0
-    f4 = 1 if (ocf0 and a0 and roa0 and (ocf0 / a0) > roa0) else 0
-
-    ltd0 = _row(bal, "Long Term Debt", col=0) or 0
-    ltd1 = _row(bal, "Long Term Debt", col=1) or 0
-    f5 = 1 if (a0 and a1 and (ltd0/a0) < (ltd1/a1)) else 0
-
-    ca0 = _row(bal, "Current Assets", "Total Current Assets", col=0)
-    cl0 = _row(bal, "Current Liabilities", "Total Current Liabilities", col=0)
-    ca1 = _row(bal, "Current Assets", "Total Current Assets", col=1)
-    cl1 = _row(bal, "Current Liabilities", "Total Current Liabilities", col=1)
-    f6 = 1 if (ca0 and cl0 and ca1 and cl1 and (ca0/cl0) > (ca1/cl1)) else 0
-
-    sh0 = _row(bal, "Share Issued", col=0);  sh1 = _row(bal, "Share Issued", col=1)
-    f7 = (1 if sh0 <= sh1 else 0) if (sh0 and sh1) else 1
-
-    rev0 = _row(inc, "Total Revenue", col=0);  gp0 = _row(inc, "Gross Profit", col=0)
-    rev1 = _row(inc, "Total Revenue", col=1);  gp1 = _row(inc, "Gross Profit", col=1)
-    f8 = 1 if (gp0 and rev0 and gp1 and rev1 and (gp0/rev0) > (gp1/rev1)) else 0
-
-    f9 = 1 if (rev0 and a0 and rev1 and a1 and (rev0/a0) > (rev1/a1)) else 0
-
-    f_score = f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9
+    f_score = piotroski_f_score(inc, bal, cf)
 
     # ── Coffee Can — skip entirely when Piotroski < 7 ─────────────────────────
     if f_score < 7:

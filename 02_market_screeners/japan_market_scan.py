@@ -25,24 +25,21 @@
 #   pip install kabupy yfinance pandas openpyxl requests
 
 import argparse
-import json
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
 import requests
 import yfinance as yf
+from scan_common import (  # sibling module; the script dir is on sys.path
+    OPENPYXL_OK, ASIA_PALETTE, first_df as _first_df, piotroski_f_score, read_cache,
+    series as _series, style_sheet as _shared_style_sheet, write_cache,
+)
 
-try:
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
-    OPENPYXL_OK = True
-except ImportError:
-    OPENPYXL_OK = False
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 DOWNLOAD_DIR     = Path("./japan_scan")
@@ -68,21 +65,12 @@ JPX_MASTER_URL = (
 # ── Symbol universe ───────────────────────────────────────────────────────────
 
 def _load_cache():
-    try:
-        if _CACHE_FILE.exists():
-            data = json.loads(_CACHE_FILE.read_text())
-            if time.time() - data.get("ts", 0) < SYMBOL_CACHE_TTL:
-                return data.get("tickers", [])
-    except Exception:
-        pass
-    return None
+    data = read_cache(_CACHE_FILE, SYMBOL_CACHE_TTL)
+    return data.get("tickers", []) if data is not None else None
 
 
 def _save_cache(tickers):
-    try:
-        _CACHE_FILE.write_text(json.dumps({"ts": time.time(), "tickers": tickers}))
-    except Exception:
-        pass
+    write_cache(_CACHE_FILE, tickers=tickers)
 
 
 def fetch_tse_universe_kabupy() -> list[dict]:
@@ -290,35 +278,6 @@ def compute_darvas_box(df: pd.DataFrame, confirm: int = DARVAS_CONFIRM) -> dict:
 
 # ── Fundamental helpers ───────────────────────────────────────────────────────
 
-def _first_df(ticker, *attrs):
-    for attr in attrs:
-        df = getattr(ticker, attr, None)
-        if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
-            return df
-    return None
-
-
-def _row(df, *names, col: int = 0):
-    if df is None or df.empty:
-        return None
-    for name in names:
-        if name in df.index:
-            try:
-                val = df.loc[name].iloc[col]
-                return float(val) if pd.notna(val) else None
-            except Exception:
-                pass
-    return None
-
-
-def _series(df, *names):
-    if df is None or df.empty:
-        return []
-    for name in names:
-        if name in df.index:
-            return [float(v) for v in df.loc[name].dropna() if pd.notna(v)]
-    return []
-
 
 # ── Fundamental scan ─────────────────────────────────────────────────────────
 
@@ -339,37 +298,7 @@ def fundamental_scan(yf_ticker: str) -> dict:
 
     # ── Piotroski F-Score ─────────────────────────────────────────────────────
     try:
-        ni0 = _row(inc, "Net Income", col=0);  a0 = _row(bal, "Total Assets", col=0)
-        ni1 = _row(inc, "Net Income", col=1);  a1 = _row(bal, "Total Assets", col=1)
-        roa0 = (ni0 / a0) if (ni0 and a0) else None
-        roa1 = (ni1 / a1) if (ni1 and a1) else None
-        ocf0 = _row(cf, "Operating Cash Flow", "Total Cash From Operating Activities")
-
-        f1 = 1 if (roa0 and roa0 > 0)              else 0
-        f2 = 1 if (ocf0 and ocf0 > 0)              else 0
-        f3 = 1 if (roa0 and roa1 and roa0 > roa1)  else 0
-        f4 = 1 if (ocf0 and a0 and roa0 and (ocf0 / a0) > roa0) else 0
-
-        ltd0 = _row(bal, "Long Term Debt", col=0) or 0
-        ltd1 = _row(bal, "Long Term Debt", col=1) or 0
-        f5 = 1 if (a0 and a1 and (ltd0 / a0) < (ltd1 / a1)) else 0
-
-        ca0 = _row(bal, "Current Assets", "Total Current Assets", col=0)
-        cl0 = _row(bal, "Current Liabilities", "Total Current Liabilities", col=0)
-        ca1 = _row(bal, "Current Assets", "Total Current Assets", col=1)
-        cl1 = _row(bal, "Current Liabilities", "Total Current Liabilities", col=1)
-        f6 = 1 if (ca0 and cl0 and ca1 and cl1 and (ca0 / cl0) > (ca1 / cl1)) else 0
-
-        sh0 = _row(bal, "Share Issued", col=0)
-        sh1 = _row(bal, "Share Issued", col=1)
-        f7 = (1 if sh0 <= sh1 else 0) if (sh0 and sh1) else 1
-
-        rev0 = _row(inc, "Total Revenue", col=0); gp0 = _row(inc, "Gross Profit", col=0)
-        rev1 = _row(inc, "Total Revenue", col=1); gp1 = _row(inc, "Gross Profit", col=1)
-        f8 = 1 if (gp0 and rev0 and gp1 and rev1 and (gp0 / rev0) > (gp1 / rev1)) else 0
-        f9 = 1 if (rev0 and a0 and rev1 and a1 and (rev0 / a0) > (rev1 / a1)) else 0
-
-        f_score = f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9
+        f_score = piotroski_f_score(inc, bal, cf)
         result["f_score"]  = f_score
         result["f_strong"] = f_score >= PIOTROSKI_STRONG
     except Exception:
@@ -445,46 +374,7 @@ def fundamental_scan(yf_ticker: str) -> dict:
 # ── Excel styling ─────────────────────────────────────────────────────────────
 
 def style_sheet(ws):
-    if not OPENPYXL_OK:
-        return
-    fill_hdr  = PatternFill(start_color="1A3A5C", end_color="1A3A5C", fill_type="solid")
-    fill_alt  = PatternFill(start_color="F0F4F8", end_color="F0F4F8", fill_type="solid")
-    font_hdr  = Font(name="Calibri", size=11, bold=True,  color="FFFFFF")
-    font_body = Font(name="Calibri", size=11, bold=False, color="000000")
-    thin = Border(
-        left=Side(style="thin", color="CBD5E0"), right=Side(style="thin", color="CBD5E0"),
-        top=Side(style="thin", color="CBD5E0"),  bottom=Side(style="thin", color="CBD5E0"),
-    )
-    for col_idx in range(1, ws.max_column + 1):
-        cell = ws.cell(row=1, column=col_idx)
-        cell.font = font_hdr; cell.fill = fill_hdr; cell.border = thin
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    for row_idx in range(2, ws.max_row + 1):
-        for col_idx in range(1, ws.max_column + 1):
-            cell = ws.cell(row=row_idx, column=col_idx)
-            cell.font = font_body; cell.border = thin
-            if row_idx % 2 == 1:
-                cell.fill = fill_alt
-            hdr = str(ws.cell(row=1, column=col_idx).value or "").upper()
-            val = cell.value
-            if isinstance(val, (int, float)):
-                cell.alignment = Alignment(horizontal="right", vertical="center")
-                if any(k in hdr for k in ["%", "CAGR", "ROCE", "YIELD"]):
-                    cell.number_format = '0.00"%"'
-                elif any(k in hdr for k in ["CAP", "LTP", "BOX", "PRICE", "200"]):
-                    cell.number_format = '#,##0'
-                else:
-                    cell.number_format = '0.00'
-            else:
-                cell.alignment = Alignment(horizontal="left", vertical="center")
-
-    ws.row_dimensions[1].height = 28
-    for r in range(2, ws.max_row + 1):
-        ws.row_dimensions[r].height = 20
-    for col in ws.columns:
-        max_len = max(len(str(cell.value or "")) for cell in col)
-        ws.column_dimensions[get_column_letter(col[0].column)].width = max(max_len + 4, 12)
+    _shared_style_sheet(ws, ASIA_PALETTE)
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

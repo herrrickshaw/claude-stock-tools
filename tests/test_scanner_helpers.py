@@ -24,25 +24,25 @@ def test_first_df_skips_empty_and_missing(load_scanner, name):
     assert m._first_df(t, "missing", "empty") is None
 
 
-@pytest.mark.parametrize("name", SCANNERS)
-def test_row_returns_float_or_none(load_scanner, name):
-    m = load_scanner(name)
+def test_row_returns_float_or_none():
+    import scan_common as m
+
     df = pd.DataFrame({"y1": [1.5, None], "y0": [2.0, 3.0]}, index=["Rev", "NaNRow"])
-    assert m._row(df, "Nope", "Rev") == 1.5
-    assert m._row(df, "Rev", col=1) == 2.0
-    assert m._row(df, "NaNRow") is None
-    assert m._row(df, "Absent") is None
-    assert m._row(None, "Rev") is None
-    assert m._row(pd.DataFrame(), "Rev") is None
+    assert m.row(df, "Nope", "Rev") == 1.5
+    assert m.row(df, "Rev", col=1) == 2.0
+    assert m.row(df, "NaNRow") is None
+    assert m.row(df, "Absent") is None
+    assert m.row(None, "Rev") is None
+    assert m.row(pd.DataFrame(), "Rev") is None
 
 
-@pytest.mark.parametrize("name", ("europe", "japan", "korea"))
-def test_series_drops_nan(load_scanner, name):
-    m = load_scanner(name)
+def test_series_drops_nan():
+    import scan_common as m
+
     df = pd.DataFrame([[1.0, None, 3.0]], index=["Rev"])
-    assert m._series(df, "x", "Rev") == [1.0, 3.0]
-    assert m._series(df, "x") == []
-    assert m._series(None, "Rev") == []
+    assert m.series(df, "x", "Rev") == [1.0, 3.0]
+    assert m.series(df, "x") == []
+    assert m.series(None, "Rev") == []
 
 
 @pytest.mark.parametrize("name,key", [("europe", "universe"), ("korea", "universe"), ("japan", "tickers")])
@@ -141,3 +141,9 @@ def test_darvas_current_bar_excluded_from_box(load_scanner, name):
     assert res["box_top"] < 99  # the 99 spike on the current bar did not become the box top
     closes[-1] = 1
     assert m.compute_darvas_box(_bars(highs, lows, closes))["signal"] == "BREAKDOWN_SELL"
+
+
+def test_piotroski_f_score_bounds():
+    import scan_common as m
+
+    assert m.piotroski_f_score(pd.DataFrame(), None, None) == 1  # only the "no dilution" default point

@@ -37,8 +37,9 @@ import requests
 import yfinance as yf
 from scan_common import (  # sibling module; the script dir is on sys.path
     compact_darvas_box,
-    OPENPYXL_OK, ASIA_PALETTE, first_df as _first_df, piotroski_f_score, read_cache,
-    series as _series, style_sheet as _shared_style_sheet, write_cache,
+    OPENPYXL_OK, ASIA_PALETTE, first_df as _first_df, ma200_trend, piotroski_f_score, price_change,
+    read_cache, run_fundamental_pool, series as _series, style_sheet as _shared_style_sheet, write_cache,
+    write_scan_workbook,
 )
 
 
@@ -323,6 +324,117 @@ def style_sheet(ws):
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+def _build_tech_row(yf_tkr: str, df: pd.DataFrame, info: dict) -> dict:
+    """Stage-3 row for one ticker: price change (whole yen), 200-day MA trend and the Darvas Box fields."""
+    darv = compute_darvas_box(df)
+    closes = pd.to_numeric(df["Close"], errors="coerce").dropna()
+    ltp, _prev, chg_pct = price_change(closes, 0)
+    ma200, dist_ma, trend = ma200_trend(closes, ltp, 0, "Insufficient History")
+    return {
+        "YF_Ticker":          yf_tkr,
+        "Code":               info.get("code", yf_tkr.replace(".T", "")),
+        "Name":               info.get("name", ""),
+        "Sector":             info.get("sector", "—"),
+        "LTP_JPY":            ltp,
+        "Change%":            chg_pct,
+        "200_Day_MA":         ma200,
+        "Distance_to_200MA%": dist_ma,
+        "Trend_Signal":       trend,
+        "Darvas_Signal":      darv.get("signal"),
+        "Box_Top":            darv.get("box_top"),
+        "Box_Bottom":         darv.get("box_bottom"),
+        "Upside_to_Top%":     darv.get("upside_pct"),
+        "Position_in_Box%":   darv.get("pos_in_box"),
+        "Data_Points":        darv.get("data_points"),
+    }
+
+
+def _fund_row(tkr: str, tech: dict, res: dict) -> dict:
+    """Stage-4 row: the technical context of a breakout joined with its fundamental scan result."""
+    return {
+        "YF_Ticker":       tkr,
+        "Code":            tech.get("Code"),
+        "Name":            tech.get("Name"),
+        "Sector":          tech.get("Sector"),
+        "LTP_JPY":         tech.get("LTP_JPY"),
+        "Change%":         tech.get("Change%"),
+        "Darvas_Signal":   tech.get("Darvas_Signal"),
+        "Upside_to_Top%":  tech.get("Upside_to_Top%"),
+        "200_Day_MA":      tech.get("200_Day_MA"),
+        "Piotroski_Score": res.get("f_score"),
+        "Piotroski_Strong": ("YES" if res.get("f_strong") else "NO"),
+        "CoffeeCan":       res.get("cc_qualifies", "FAIL"),
+        "CC_Score":        res.get("cc_score", "—"),
+        "Rev_CAGR%":       res.get("cc_rev_cagr"),
+        "ROCE_Avg%":       res.get("cc_roce_avg"),
+        "Debt_Equity":     res.get("cc_debt_equity"),
+        "MCap_B_JPY":      res.get("market_cap_b_jpy"),
+        "Error":           res.get("error", ""),
+    }
+
+
+def _screen_darvas(ohlc: dict, meta: dict) -> tuple:
+    """Stage 3: (all_rows, darvas_rows, breakout_tickers) for every ticker with usable OHLC data."""
+    all_rows = [_build_tech_row(tkr, df, meta.get(tkr, {})) for tkr, df in ohlc.items()]
+    darvas_rows = [r.copy() for r in all_rows if r["Darvas_Signal"] in ("BREAKOUT_BUY", "BREAKDOWN_SELL")]
+    breakout_tickers = [r["YF_Ticker"] for r in all_rows if r["Darvas_Signal"] == "BREAKOUT_BUY"]
+    return all_rows, darvas_rows, breakout_tickers
+
+
+def _scan_fundamentals(breakout_tickers: list, darvas_rows: list, workers: int) -> tuple:
+    """Stage 4: (candidates, fund_rows, triple_rows) for the freshest breakouts (capped at MAX_FUND_CANDIDATES)."""
+    def _upside(tkr):
+        row = next((r for r in darvas_rows if r["YF_Ticker"] == tkr), None)
+        return abs(row.get("Upside_to_Top%") or 999)
+
+    if len(breakout_tickers) > MAX_FUND_CANDIDATES:
+        breakout_tickers = sorted(breakout_tickers, key=_upside)[:MAX_FUND_CANDIDATES]
+        print(f"  (capped to {MAX_FUND_CANDIDATES} freshest breakouts)")
+
+    print(f"\nStage 4 — Fundamental scans ({len(breakout_tickers)} candidates, "
+          f"{workers} workers) …")
+    fund_rows, triple_rows = run_fundamental_pool(
+        breakout_tickers, fundamental_scan, workers,
+        build_row=lambda tkr, res: _fund_row(
+            tkr, next((r for r in darvas_rows if r["YF_Ticker"] == tkr), {}), res),
+        is_triple=lambda res: res.get("f_strong") and res.get("cc_qualifies") == "PASS",
+        name_of=str,
+        progress_fmt="    {done}/{total} done  (triple hits: {triples})", every=20)
+    return breakout_tickers, fund_rows, triple_rows
+
+
+def _save_workbook(all_rows, darvas_rows, fund_rows, triple_rows) -> Path:
+    """Stage 5: write the four result sheets to ``DOWNLOAD_DIR`` and return the file path."""
+    date_str = datetime.today().strftime("%Y%m%d_%H%M")
+    path = DOWNLOAD_DIR / f"japan_market_scan_{date_str}.xlsx"
+    write_scan_workbook(path, [
+        ("All_Stocks", all_rows, "Change%"),
+        ("Darvas_Signals", darvas_rows, "Upside_to_Top%"),
+        ("Fundamentals", fund_rows, "Piotroski_Score"),
+        ("Triple_Hits", triple_rows, "Piotroski_Score"),
+    ], style=style_sheet if OPENPYXL_OK else None)
+    return path
+
+
+def _print_summary(all_rows, breakout_tickers, fund_rows, triple_rows, path) -> None:
+    """Print the closing banner, the triple-hit list and where the workbook went."""
+    print(f"\n{'='*60}")
+    print(f"  SCAN COMPLETE — {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
+    print(f"  TSE stocks scanned:    {len(all_rows)}")
+    print(f"  Darvas Breakouts:      {len(breakout_tickers)}")
+    print(f"  Fundamentals scanned:  {len(fund_rows)}")
+    print(f"  ★ TRIPLE HITS:         {len(triple_rows)}")
+    if triple_rows:
+        print("\n  Triple-hit stocks:")
+        for r in sorted(triple_rows, key=lambda x: x.get("Piotroski_Score") or 0, reverse=True):
+            print(f"    [{r['Code']}] {r['Name']:<30}  F={r['Piotroski_Score']}/9  "
+                  f"CC={r['CC_Score']}  ¥{r['LTP_JPY']:,.0f}")
+    else:
+        print("\n  No Triple Hit stocks found today.")
+    print(f"\n  📊 Excel saved → {path}\n")
+    print(f"{'='*60}\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Full TSE scanner — Darvas + Piotroski + Coffee Can")
     parser.add_argument("--top",      type=int, default=0,     help="Limit to first N tickers")
@@ -351,140 +463,22 @@ def main():
 
     # Stage 3 — Darvas Box + 200-day MA
     print("\nStage 3 — Darvas Box & 200-day MA screen …")
-    all_rows, darvas_rows, breakout_tickers = [], [], []
-
-    for yf_tkr, df in ohlc.items():
-        info    = meta.get(yf_tkr, {})
-        darv    = compute_darvas_box(df)
-        closes  = pd.to_numeric(df["Close"], errors="coerce").dropna()
-        ltp     = round(float(closes.iloc[-1]), 0)  if not closes.empty  else None
-        prev    = round(float(closes.iloc[-2]), 0)  if len(closes) >= 2  else None
-        chg_pct = round((ltp - prev) / prev * 100, 2) if (ltp and prev) else None
-
-        ma200   = round(closes.rolling(200).mean().iloc[-1], 0) if len(closes) >= 200 else None
-        dist_ma = round((ltp - ma200) / ma200 * 100, 2)         if (ma200 and ltp)   else None
-        trend   = ("Above 200MA (Uptrend)"    if dist_ma and dist_ma >  5 else
-                   "Below 200MA (Downtrend)"  if dist_ma and dist_ma < -5 else
-                   "Near 200MA (Consolidation)" if dist_ma else "Insufficient History")
-
-        row = {
-            "YF_Ticker":          yf_tkr,
-            "Code":               info.get("code", yf_tkr.replace(".T", "")),
-            "Name":               info.get("name", ""),
-            "Sector":             info.get("sector", "—"),
-            "LTP_JPY":            ltp,
-            "Change%":            chg_pct,
-            "200_Day_MA":         ma200,
-            "Distance_to_200MA%": dist_ma,
-            "Trend_Signal":       trend,
-            "Darvas_Signal":      darv.get("signal"),
-            "Box_Top":            darv.get("box_top"),
-            "Box_Bottom":         darv.get("box_bottom"),
-            "Upside_to_Top%":     darv.get("upside_pct"),
-            "Position_in_Box%":   darv.get("pos_in_box"),
-            "Data_Points":        darv.get("data_points"),
-        }
-        all_rows.append(row)
-        if darv.get("signal") in ("BREAKOUT_BUY", "BREAKDOWN_SELL"):
-            darvas_rows.append(row.copy())
-        if darv.get("signal") == "BREAKOUT_BUY":
-            breakout_tickers.append(yf_tkr)
-
+    all_rows, darvas_rows, breakout_tickers = _screen_darvas(ohlc, meta)
     print(f"  Breakout BUY:   {len(breakout_tickers)}")
     print(f"  Breakdown SELL: {sum(1 for r in darvas_rows if r['Darvas_Signal'] == 'BREAKDOWN_SELL')}")
     print(f"  In Box:         {len(all_rows) - len(darvas_rows)}")
 
     # Stage 4 — Fundamentals on breakout candidates
-    fund_rows, triple_rows = [], []
-
     if not args.no_scans and breakout_tickers:
-        # Cap to freshest MAX_FUND_CANDIDATES breakouts
-        def _upside(tkr):
-            row = next((r for r in darvas_rows if r["YF_Ticker"] == tkr), None)
-            return abs(row.get("Upside_to_Top%") or 999)
-        if len(breakout_tickers) > MAX_FUND_CANDIDATES:
-            breakout_tickers = sorted(breakout_tickers, key=_upside)[:MAX_FUND_CANDIDATES]
-            print(f"  (capped to {MAX_FUND_CANDIDATES} freshest breakouts)")
-
-        print(f"\nStage 4 — Fundamental scans ({len(breakout_tickers)} candidates, "
-              f"{args.workers} workers) …")
-        done = 0
-        with ThreadPoolExecutor(max_workers=args.workers) as pool:
-            futures = {pool.submit(fundamental_scan, tkr): tkr for tkr in breakout_tickers}
-            for future in as_completed(futures):
-                tkr  = futures[future]
-                done += 1
-                try:
-                    res  = future.result()
-                    tech = next((r for r in darvas_rows if r["YF_Ticker"] == tkr), {})
-                    fund_row = {
-                        "YF_Ticker":       tkr,
-                        "Code":            tech.get("Code"),
-                        "Name":            tech.get("Name"),
-                        "Sector":          tech.get("Sector"),
-                        "LTP_JPY":         tech.get("LTP_JPY"),
-                        "Change%":         tech.get("Change%"),
-                        "Darvas_Signal":   tech.get("Darvas_Signal"),
-                        "Upside_to_Top%":  tech.get("Upside_to_Top%"),
-                        "200_Day_MA":      tech.get("200_Day_MA"),
-                        "Piotroski_Score": res.get("f_score"),
-                        "Piotroski_Strong":("YES" if res.get("f_strong") else "NO"),
-                        "CoffeeCan":       res.get("cc_qualifies", "FAIL"),
-                        "CC_Score":        res.get("cc_score", "—"),
-                        "Rev_CAGR%":       res.get("cc_rev_cagr"),
-                        "ROCE_Avg%":       res.get("cc_roce_avg"),
-                        "Debt_Equity":     res.get("cc_debt_equity"),
-                        "MCap_B_JPY":      res.get("market_cap_b_jpy"),
-                        "Error":           res.get("error", ""),
-                    }
-                    fund_rows.append(fund_row)
-                    if res.get("f_strong") and res.get("cc_qualifies") == "PASS":
-                        triple_rows.append(fund_row.copy())
-                    if done % 20 == 0 or done == len(breakout_tickers):
-                        print(f"    {done}/{len(breakout_tickers)} done  "
-                              f"(triple hits: {len(triple_rows)})")
-                except Exception as e:
-                    print(f"    {tkr}: error — {e}")
+        breakout_tickers, fund_rows, triple_rows = _scan_fundamentals(breakout_tickers, darvas_rows, args.workers)
     else:
+        fund_rows, triple_rows = [], []
         print("\nStage 4 — Skipped")
 
     # Stage 5 — Excel
     print("\nStage 5 — Saving Excel workbook …")
-    date_str = datetime.today().strftime("%Y%m%d_%H%M")
-    path = DOWNLOAD_DIR / f"japan_market_scan_{date_str}.xlsx"
-
-    with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        def write_sheet(rows, name, sort_col=None):
-            if not rows:
-                pd.DataFrame().to_excel(writer, sheet_name=name, index=False)
-                return
-            df = pd.DataFrame(rows)
-            if sort_col and sort_col in df.columns:
-                df = df.sort_values(sort_col, ascending=False)
-            df.to_excel(writer, sheet_name=name, index=False)
-            if OPENPYXL_OK:
-                style_sheet(writer.sheets[name])
-
-        write_sheet(all_rows,    "All_Stocks",    sort_col="Change%")
-        write_sheet(darvas_rows, "Darvas_Signals", sort_col="Upside_to_Top%")
-        write_sheet(fund_rows,   "Fundamentals",  sort_col="Piotroski_Score")
-        write_sheet(triple_rows, "Triple_Hits",   sort_col="Piotroski_Score")
-
-    print(f"\n{'='*60}")
-    print(f"  SCAN COMPLETE — {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
-    print(f"  TSE stocks scanned:    {len(all_rows)}")
-    print(f"  Darvas Breakouts:      {len(breakout_tickers)}")
-    print(f"  Fundamentals scanned:  {len(fund_rows)}")
-    print(f"  ★ TRIPLE HITS:         {len(triple_rows)}")
-    if triple_rows:
-        print("\n  Triple-hit stocks:")
-        for r in sorted(triple_rows, key=lambda x: x.get("Piotroski_Score") or 0, reverse=True):
-            print(f"    [{r['Code']}] {r['Name']:<30}  F={r['Piotroski_Score']}/9  "
-                  f"CC={r['CC_Score']}  ¥{r['LTP_JPY']:,.0f}")
-    else:
-        print("\n  No Triple Hit stocks found today.")
-    print(f"\n  📊 Excel saved → {path}\n")
-    print(f"{'='*60}\n")
+    path = _save_workbook(all_rows, darvas_rows, fund_rows, triple_rows)
+    _print_summary(all_rows, breakout_tickers, fund_rows, triple_rows, path)
 
 
 if __name__ == "__main__":

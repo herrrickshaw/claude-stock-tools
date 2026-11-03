@@ -81,9 +81,12 @@ def _install(m, name, monkeypatch):
     return m.main
 
 
+@pytest.mark.parametrize("cap", [None, 1], ids=["all", "capped"])
 @pytest.mark.parametrize("name", SCANNERS)
-def test_main_golden(load_scanner, monkeypatch, capsys, tmp_path, name):
+def test_main_golden(load_scanner, monkeypatch, capsys, tmp_path, name, cap):
     m = load_scanner(name)
+    if cap:  # exercise the "freshest N breakouts" pre-filter
+        monkeypatch.setattr(m, "MAX_FUND_CANDIDATES", cap)
     run = _install(m, name, monkeypatch)
     ret = run()
     out = capsys.readouterr().out
@@ -96,7 +99,7 @@ def test_main_golden(load_scanner, monkeypatch, capsys, tmp_path, name):
     if isinstance(ret_json, dict):
         ret_json["excel_path"] = FILE_DATE.sub("<DATE>", ret_json.get("excel_path", ""))
     got = {"stdout": out, "sheets": sheets, "return": ret_json}
-    path = GOLDEN / f"main_{name}.json"
+    path = GOLDEN / (f"main_{name}.json" if cap is None else f"main_{name}_cap{cap}.json")
     if not path.exists():  # recorded once from the ORIGINAL implementation
         path.write_text(json.dumps(got, indent=1, sort_keys=True))
     assert got == json.loads(path.read_text())

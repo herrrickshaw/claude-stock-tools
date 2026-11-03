@@ -39,8 +39,9 @@ import requests
 import yfinance as yf
 from scan_common import (  # sibling module; the script dir is on sys.path
     compact_darvas_box,
-    OPENPYXL_OK, ASIA_PALETTE, first_df as _first_df, piotroski_f_score, read_cache,
-    series as _series, style_sheet as _shared_style_sheet, write_cache,
+    OPENPYXL_OK, ASIA_PALETTE, first_df as _first_df, ma200_trend, piotroski_f_score, price_change,
+    read_cache, run_fundamental_pool, series as _series, style_sheet as _shared_style_sheet, write_cache,
+    write_scan_workbook,
 )
 
 try:
@@ -292,166 +293,109 @@ def style_sheet(ws):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main():
-    parser = argparse.ArgumentParser(description="Full KRX scanner — Darvas + Piotroski + Coffee Can")
-    parser.add_argument("--kospi-only", action="store_true", help="Scan KOSPI only (skip KOSDAQ)")
-    parser.add_argument("--top",        type=int, default=0, help="Limit to first N tickers")
-    parser.add_argument("--no-scans",   action="store_true", help="Skip fundamental scans")
-    parser.add_argument("--workers",    type=int, default=MAX_WORKERS, help="Parallel threads")
-    args = parser.parse_args()
+def _build_tech_row(stock_info: dict, df: pd.DataFrame) -> dict:
+    """Stage-3 row for one stock: price change (whole won), 200-day MA trend and the Darvas Box fields."""
+    darv = compute_darvas_box(df)
+    closes = pd.to_numeric(df["Close"], errors="coerce").dropna()
+    ltp, _prev, chg_pct = price_change(closes, 0)
+    # 200-day MA from the 3-month window (may be None; acceptable for the Darvas screen)
+    ma200, dist_ma, trend = ma200_trend(closes, ltp, 0, "Need 200+ days")
+    code = stock_info["code"]
+    return {
+        "Code":               code,
+        "Name":               stock_info.get("name", ""),
+        "Market":             stock_info.get("market", ""),
+        "YF_Ticker":          f"{code}{stock_info.get('yf_suffix', '.KS')}",
+        "LTP_KRW":            ltp,
+        "Change%":            chg_pct,
+        "200_Day_MA":         ma200,
+        "Distance_to_200MA%": dist_ma,
+        "Trend_Signal":       trend,
+        "Darvas_Signal":      darv.get("signal"),
+        "Box_Top":            darv.get("box_top"),
+        "Box_Bottom":         darv.get("box_bottom"),
+        "Upside_to_Top%":     darv.get("upside_pct"),
+        "Position_in_Box%":   darv.get("pos_in_box"),
+        "Data_Points":        darv.get("data_points"),
+    }
 
-    print(f"\n{'#'*60}")
-    print(f"  FULL KOREA (KRX) MARKET SCAN")
-    print(f"  Started: {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
-    print(f"{'#'*60}\n")
 
-    # Stage 1 — Universe
-    print("Stage 1 — Building KRX equity universe …")
-    universe = build_krx_universe(kospi_only=args.kospi_only)
-    code_meta = {s["code"]: s for s in universe}
+def _fund_row(code: str, sfx: str, tech: dict, res: dict) -> dict:
+    """Stage-4 row: the technical context of a breakout joined with its fundamental scan result."""
+    return {
+        "Code":            code,
+        "Name":            tech.get("Name"),
+        "Market":          tech.get("Market"),
+        "YF_Ticker":       f"{code}{sfx}",
+        "LTP_KRW":         tech.get("LTP_KRW"),
+        "Change%":         tech.get("Change%"),
+        "Darvas_Signal":   tech.get("Darvas_Signal"),
+        "Upside_to_Top%":  tech.get("Upside_to_Top%"),
+        "200_Day_MA":      tech.get("200_Day_MA"),
+        "Piotroski_Score": res.get("f_score"),
+        "Piotroski_Strong": ("YES" if res.get("f_strong") else "NO"),
+        "CoffeeCan":       res.get("cc_qualifies", "FAIL"),
+        "CC_Score":        res.get("cc_score", "—"),
+        "Rev_CAGR%":       res.get("cc_rev_cagr"),
+        "ROCE_Avg%":       res.get("cc_roce_avg"),
+        "Debt_Equity":     res.get("cc_debt_equity"),
+        "MCap_100M_KRW":   res.get("market_cap_b_krw"),
+        "Error":           res.get("error", ""),
+    }
 
-    if args.top:
-        universe = universe[:args.top]
-        print(f"  (limited to first {args.top} tickers)")
 
-    print(f"  Total: {len(universe)} tickers "
-          f"({sum(1 for s in universe if s['market']=='KOSPI')} KOSPI + "
-          f"{sum(1 for s in universe if s['market']=='KOSDAQ')} KOSDAQ)")
-
-    # Stage 2 — OHLC via pykrx
-    print(f"\nStage 2 — Fetching OHLC from KRX for {len(universe)} tickers …")
-    ohlc = fetch_krx_ohlc(universe, months=3)
-
-    # Stage 3 — Darvas Box + 200-day MA
-    # For 200-day MA we need ~10 months extra; fetch separately for a 12-month window
-    # to compute MA200 for breakout candidates (avoids re-fetching entire universe)
-    print("\nStage 3 — Darvas Box screen …")
-    all_rows, darvas_rows, breakout_info = [], [], []
-
+def _screen_darvas(universe: list, ohlc: dict) -> tuple:
+    """Stage 3: (all_rows, darvas_rows, breakout_info) where breakout_info holds (code, yf_suffix) pairs."""
+    all_rows, breakout_info = [], []
     for stock_info in universe:
-        code = stock_info["code"]
-        df   = ohlc.get(code)
+        df = ohlc.get(stock_info["code"])
         if df is None:
             continue
-
-        darv    = compute_darvas_box(df)
-        closes  = pd.to_numeric(df["Close"], errors="coerce").dropna()
-        ltp     = round(float(closes.iloc[-1]), 0)  if not closes.empty  else None
-        prev    = round(float(closes.iloc[-2]), 0)  if len(closes) >= 2  else None
-        chg_pct = round((ltp - prev) / prev * 100, 2) if (ltp and prev) else None
-
-        # 200-day MA from 3-month window (may be None; acceptable for Darvas screen)
-        ma200   = round(closes.rolling(200).mean().iloc[-1], 0) if len(closes) >= 200 else None
-        dist_ma = round((ltp - ma200) / ma200 * 100, 2) if (ma200 and ltp) else None
-        trend   = ("Above 200MA (Uptrend)"      if dist_ma and dist_ma >  5 else
-                   "Below 200MA (Downtrend)"    if dist_ma and dist_ma < -5 else
-                   "Near 200MA (Consolidation)" if dist_ma else "Need 200+ days")
-
-        row = {
-            "Code":               code,
-            "Name":               stock_info.get("name", ""),
-            "Market":             stock_info.get("market", ""),
-            "YF_Ticker":          f"{code}{stock_info.get('yf_suffix', '.KS')}",
-            "LTP_KRW":            ltp,
-            "Change%":            chg_pct,
-            "200_Day_MA":         ma200,
-            "Distance_to_200MA%": dist_ma,
-            "Trend_Signal":       trend,
-            "Darvas_Signal":      darv.get("signal"),
-            "Box_Top":            darv.get("box_top"),
-            "Box_Bottom":         darv.get("box_bottom"),
-            "Upside_to_Top%":     darv.get("upside_pct"),
-            "Position_in_Box%":   darv.get("pos_in_box"),
-            "Data_Points":        darv.get("data_points"),
-        }
+        row = _build_tech_row(stock_info, df)
         all_rows.append(row)
-        if darv.get("signal") in ("BREAKOUT_BUY", "BREAKDOWN_SELL"):
-            darvas_rows.append(row.copy())
-        if darv.get("signal") == "BREAKOUT_BUY":
-            breakout_info.append((code, stock_info.get("yf_suffix", ".KS")))
+        if row["Darvas_Signal"] == "BREAKOUT_BUY":
+            breakout_info.append((stock_info["code"], stock_info.get("yf_suffix", ".KS")))
+    darvas_rows = [r.copy() for r in all_rows if r["Darvas_Signal"] in ("BREAKOUT_BUY", "BREAKDOWN_SELL")]
+    return all_rows, darvas_rows, breakout_info
 
-    print(f"  Breakout BUY:   {len(breakout_info)}")
-    print(f"  Breakdown SELL: {sum(1 for r in darvas_rows if r['Darvas_Signal'] == 'BREAKDOWN_SELL')}")
-    print(f"  In Box:         {len(all_rows) - len(darvas_rows)}")
 
-    # Stage 4 — Fundamentals on breakout candidates
-    fund_rows, triple_rows = [], []
+def _scan_fundamentals(breakout_info: list, darvas_rows: list, workers: int) -> tuple:
+    """Stage 4: (candidates, fund_rows, triple_rows) for the freshest breakouts (capped at MAX_FUND_CANDIDATES)."""
+    def _upside(code_sfx):
+        row = next((r for r in darvas_rows if r["Code"] == code_sfx[0]), None)
+        return abs(row.get("Upside_to_Top%") or 999)
 
-    if not args.no_scans and breakout_info:
-        # Cap to freshest breakouts
-        def _upside(code_sfx):
-            code_v = code_sfx[0]
-            row = next((r for r in darvas_rows if r["Code"] == code_v), None)
-            return abs(row.get("Upside_to_Top%") or 999)
-        if len(breakout_info) > MAX_FUND_CANDIDATES:
-            breakout_info = sorted(breakout_info, key=_upside)[:MAX_FUND_CANDIDATES]
-            print(f"  (capped to {MAX_FUND_CANDIDATES} freshest breakouts)")
+    if len(breakout_info) > MAX_FUND_CANDIDATES:
+        breakout_info = sorted(breakout_info, key=_upside)[:MAX_FUND_CANDIDATES]
+        print(f"  (capped to {MAX_FUND_CANDIDATES} freshest breakouts)")
 
-        print(f"\nStage 4 — Fundamental scans ({len(breakout_info)} candidates, "
-              f"{args.workers} workers) …")
-        done = 0
-        with ThreadPoolExecutor(max_workers=args.workers) as pool:
-            futures = {pool.submit(fundamental_scan, code, sfx): (code, sfx)
-                       for code, sfx in breakout_info}
-            for future in as_completed(futures):
-                code, sfx = futures[future]
-                done += 1
-                try:
-                    res  = future.result()
-                    tech = next((r for r in darvas_rows if r["Code"] == code), {})
-                    fund_row = {
-                        "Code":            code,
-                        "Name":            tech.get("Name"),
-                        "Market":          tech.get("Market"),
-                        "YF_Ticker":       f"{code}{sfx}",
-                        "LTP_KRW":         tech.get("LTP_KRW"),
-                        "Change%":         tech.get("Change%"),
-                        "Darvas_Signal":   tech.get("Darvas_Signal"),
-                        "Upside_to_Top%":  tech.get("Upside_to_Top%"),
-                        "200_Day_MA":      tech.get("200_Day_MA"),
-                        "Piotroski_Score": res.get("f_score"),
-                        "Piotroski_Strong":("YES" if res.get("f_strong") else "NO"),
-                        "CoffeeCan":       res.get("cc_qualifies", "FAIL"),
-                        "CC_Score":        res.get("cc_score", "—"),
-                        "Rev_CAGR%":       res.get("cc_rev_cagr"),
-                        "ROCE_Avg%":       res.get("cc_roce_avg"),
-                        "Debt_Equity":     res.get("cc_debt_equity"),
-                        "MCap_100M_KRW":   res.get("market_cap_b_krw"),
-                        "Error":           res.get("error", ""),
-                    }
-                    fund_rows.append(fund_row)
-                    if res.get("f_strong") and res.get("cc_qualifies") == "PASS":
-                        triple_rows.append(fund_row.copy())
-                    if done % 20 == 0 or done == len(breakout_info):
-                        print(f"    {done}/{len(breakout_info)} done  "
-                              f"(triple hits: {len(triple_rows)})")
-                except Exception as e:
-                    print(f"    {code}: error — {e}")
-    else:
-        print("\nStage 4 — Skipped")
+    print(f"\nStage 4 — Fundamental scans ({len(breakout_info)} candidates, "
+          f"{workers} workers) …")
+    fund_rows, triple_rows = run_fundamental_pool(
+        breakout_info, lambda cand: fundamental_scan(*cand), workers,
+        build_row=lambda cand, res: _fund_row(
+            cand[0], cand[1], next((r for r in darvas_rows if r["Code"] == cand[0]), {}), res),
+        is_triple=lambda res: res.get("f_strong") and res.get("cc_qualifies") == "PASS",
+        name_of=lambda cand: cand[0],
+        progress_fmt="    {done}/{total} done  (triple hits: {triples})", every=20)
+    return breakout_info, fund_rows, triple_rows
 
-    # Stage 5 — Excel
-    print("\nStage 5 — Saving Excel workbook …")
+
+def _save_workbook(all_rows, darvas_rows, fund_rows, triple_rows) -> Path:
+    """Stage 5: write the four result sheets to ``DOWNLOAD_DIR`` and return the file path."""
     date_str = datetime.today().strftime("%Y%m%d_%H%M")
     path = DOWNLOAD_DIR / f"korea_market_scan_{date_str}.xlsx"
+    write_scan_workbook(path, [
+        ("All_Stocks", all_rows, "Change%"),
+        ("Darvas_Signals", darvas_rows, "Upside_to_Top%"),
+        ("Fundamentals", fund_rows, "Piotroski_Score"),
+        ("Triple_Hits", triple_rows, "Piotroski_Score"),
+    ], style=style_sheet if OPENPYXL_OK else None)
+    return path
 
-    with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        def write_sheet(rows, name, sort_col=None):
-            if not rows:
-                pd.DataFrame().to_excel(writer, sheet_name=name, index=False)
-                return
-            df = pd.DataFrame(rows)
-            if sort_col and sort_col in df.columns:
-                df = df.sort_values(sort_col, ascending=False)
-            df.to_excel(writer, sheet_name=name, index=False)
-            if OPENPYXL_OK:
-                style_sheet(writer.sheets[name])
 
-        write_sheet(all_rows,    "All_Stocks",    sort_col="Change%")
-        write_sheet(darvas_rows, "Darvas_Signals", sort_col="Upside_to_Top%")
-        write_sheet(fund_rows,   "Fundamentals",  sort_col="Piotroski_Score")
-        write_sheet(triple_rows, "Triple_Hits",   sort_col="Piotroski_Score")
-
+def _print_summary(all_rows, breakout_info, fund_rows, triple_rows, path) -> None:
+    """Print the closing banner, the triple-hit list and where the workbook went."""
     print(f"\n{'='*60}")
     print(f"  SCAN COMPLETE — {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
     print(f"  KRX stocks scanned:    {len(all_rows)}")
@@ -468,6 +412,55 @@ def main():
         print("\n  No Triple Hit stocks found today.")
     print(f"\n  📊 Excel saved → {path}\n")
     print(f"{'='*60}\n")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Full KRX scanner — Darvas + Piotroski + Coffee Can")
+    parser.add_argument("--kospi-only", action="store_true", help="Scan KOSPI only (skip KOSDAQ)")
+    parser.add_argument("--top",        type=int, default=0, help="Limit to first N tickers")
+    parser.add_argument("--no-scans",   action="store_true", help="Skip fundamental scans")
+    parser.add_argument("--workers",    type=int, default=MAX_WORKERS, help="Parallel threads")
+    args = parser.parse_args()
+
+    print(f"\n{'#'*60}")
+    print(f"  FULL KOREA (KRX) MARKET SCAN")
+    print(f"  Started: {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
+    print(f"{'#'*60}\n")
+
+    # Stage 1 — Universe
+    print("Stage 1 — Building KRX equity universe …")
+    universe = build_krx_universe(kospi_only=args.kospi_only)
+
+    if args.top:
+        universe = universe[:args.top]
+        print(f"  (limited to first {args.top} tickers)")
+
+    print(f"  Total: {len(universe)} tickers "
+          f"({sum(1 for s in universe if s['market']=='KOSPI')} KOSPI + "
+          f"{sum(1 for s in universe if s['market']=='KOSDAQ')} KOSDAQ)")
+
+    # Stage 2 — OHLC via pykrx
+    print(f"\nStage 2 — Fetching OHLC from KRX for {len(universe)} tickers …")
+    ohlc = fetch_krx_ohlc(universe, months=3)
+
+    # Stage 3 — Darvas Box + 200-day MA
+    print("\nStage 3 — Darvas Box screen …")
+    all_rows, darvas_rows, breakout_info = _screen_darvas(universe, ohlc)
+    print(f"  Breakout BUY:   {len(breakout_info)}")
+    print(f"  Breakdown SELL: {sum(1 for r in darvas_rows if r['Darvas_Signal'] == 'BREAKDOWN_SELL')}")
+    print(f"  In Box:         {len(all_rows) - len(darvas_rows)}")
+
+    # Stage 4 — Fundamentals on breakout candidates
+    if not args.no_scans and breakout_info:
+        breakout_info, fund_rows, triple_rows = _scan_fundamentals(breakout_info, darvas_rows, args.workers)
+    else:
+        fund_rows, triple_rows = [], []
+        print("\nStage 4 — Skipped")
+
+    # Stage 5 — Excel
+    print("\nStage 5 — Saving Excel workbook …")
+    path = _save_workbook(all_rows, darvas_rows, fund_rows, triple_rows)
+    _print_summary(all_rows, breakout_info, fund_rows, triple_rows, path)
 
 
 if __name__ == "__main__":

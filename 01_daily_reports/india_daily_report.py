@@ -33,6 +33,8 @@ from pathlib import Path
 
 # ── Third-party ──────────────────────────────────────────────────────────────
 import pandas as pd
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "02_market_screeners"))  # shared scan helpers
+from scan_common import find_column, ohlc_lists, report_darvas_box  # noqa: E402
 
 # Primary NSE/BSE market-data libraries
 try:
@@ -351,134 +353,37 @@ def fetch_ohlc_history(symbol: str, days: int = 90) -> pd.DataFrame:
 
 def compute_darvas_box(df: pd.DataFrame, confirm: int = DARVAS_CONFIRM) -> dict:
     """
-    Detect a Darvas Box and classify the current price relative to it.
+    Detect a Darvas Box and classify the current price relative to it (Nicolas Darvas, 1960).
 
-    ── Algorithm (Nicolas Darvas, 1960) ─────────────────────────────────────
-    A "box" forms after a stock reaches a local high and then consolidates:
+    A box forms after a stock reaches a local high and then consolidates:
 
-      Box Top   : A high H[i] that is NOT exceeded by the next `confirm`
-                  trading-day highs.  We scan backwards to find the most
-                  recent such confirmed top.
+      Box Top   : the most recent high NOT exceeded by the next `confirm` trading-day highs.
+      Box Bottom: the lowest low from the box-top day onward NOT undercut for `confirm` days.
+      Signal    : BREAKOUT_BUY (close > top), BREAKDOWN_SELL (close < bottom), else IN_BOX.
 
-      Box Bottom: The lowest low from the box-top day onward that is NOT
-                  undercut for `confirm` consecutive days.
-
-      Signal    : BREAKOUT_BUY  → current close > box top
-                  BREAKDOWN_SELL → current close < box bottom
-                  IN_BOX         → price is contained within the box
+    Box formation uses only historical bars: the current (last) bar is excluded so it cannot move
+    the boundaries.
 
     Args:
         df      : DataFrame from fetch_ohlc_history (or any OHLC DataFrame)
-        confirm : Consecutive days a high/low must hold to be "confirmed"
-                  (Darvas used 3; tighten to 2 for volatile stocks)
+        confirm : Consecutive days a high/low must hold to be "confirmed" (Darvas used 3)
 
-    Returns dict with signal, box_top, box_bottom, position_in_box_pct, etc.
+    Returns dict with signal, box_top, box_bottom, position_in_box_pct, etc. (algorithm: scan_common.darvas_box).
     """
-    # ── Identify high / low / close columns robustly ─────────────────────────
-    def find_col(df, candidates):
-        for c in candidates:
-            match = next((col for col in df.columns if c.upper() in col.upper()), None)
-            if match:
-                return match
-        return None
-
-    h_col = find_col(df, ["CH_TRADE_HIGH_PRICE", "HIGH", "DAYHIGH"])
-    l_col = find_col(df, ["CH_TRADE_LOW_PRICE",  "LOW",  "DAYLOW"])
-    c_col = find_col(df, ["CH_CLOSING_PRICE",    "CLOSE","LAST"])
-
-    if not all([h_col, l_col, c_col]) or len(df) < confirm + 5:
+    cols = [find_column(df, c) for c in (("CH_TRADE_HIGH_PRICE", "HIGH", "DAYHIGH"),
+                                         ("CH_TRADE_LOW_PRICE", "LOW", "DAYLOW"),
+                                         ("CH_CLOSING_PRICE", "CLOSE", "LAST"))]
+    if not all(cols) or len(df) < confirm + 5:
         return {
             "signal":    "INSUFFICIENT_DATA",
             "box_top":   None,
             "box_bottom": None,
             "note":      f"Need ≥ {confirm + 5} rows; got {len(df)}",
         }
-
-    all_highs  = pd.to_numeric(df[h_col], errors="coerce").fillna(0).tolist()
-    all_lows   = pd.to_numeric(df[l_col], errors="coerce").fillna(0).tolist()
-    all_closes = pd.to_numeric(df[c_col], errors="coerce").fillna(0).tolist()
-
-    # The current bar (last row) is the price we want to classify.
-    # Box formation uses only the HISTORICAL bars (all except the last) so
-    # the current bar's data cannot "contaminate" the box boundaries.
-    current = all_closes[-1]
-    highs   = all_highs[:-1]
-    lows    = all_lows[:-1]
-    n       = len(highs)
-
-    # ── Step 1: find the most recent confirmed box top ────────────────────────
-    # Scan backwards through historical highs; a top is "confirmed" when the
-    # next `confirm` bars all have highs strictly below the candidate.
-    box_top_idx = None
-    box_top     = None
-    for i in range(n - confirm - 1, -1, -1):
-        candidate = highs[i]
-        if candidate == 0:
-            continue
-        window = highs[i + 1 : i + 1 + confirm]
-        if len(window) == confirm and all(h < candidate for h in window):
-            box_top_idx = i
-            box_top     = candidate
-            break
-
-    if box_top is None:
-        return {
-            "signal":    "NO_BOX",
-            "box_top":   None,
-            "box_bottom": None,
-            "note":      "No confirmed Darvas top found in the look-back window.",
-        }
-
-    # ── Step 2: find the confirmed box bottom ────────────────────────────────
-    # Look only at historical lows from the box-top day onward (still
-    # excluding the current bar so it cannot pull the bottom down).
-    segment = lows[box_top_idx:]
-    box_bottom = None
-    for i in range(len(segment) - confirm):
-        candidate = segment[i]
-        if candidate == 0:
-            continue
-        window = segment[i + 1 : i + 1 + confirm]
-        if len(window) == confirm and all(l > candidate for l in window):
-            box_bottom = candidate
-            break
-
-    # Fallback: minimum of the historical segment when no confirmed bottom found.
-    if box_bottom is None:
-        valid_lows = [l for l in segment if l > 0]
-        box_bottom = min(valid_lows) if valid_lows else None
-
-    if box_bottom is None:
-        return {
-            "signal":    "NO_BOX",
-            "box_top":   box_top,
-            "box_bottom": None,
-            "note":      "Could not confirm a box bottom.",
-        }
-
-    # ── Step 3: classify today's close against the historical box ─────────────
-    if current > box_top:
-        signal = "BREAKOUT_BUY"
-    elif current < box_bottom:
-        signal = "BREAKDOWN_SELL"
-    else:
-        signal = "IN_BOX"
-
-    box_range   = box_top - box_bottom
-    pos_in_box  = ((current - box_bottom) / box_range * 100) if box_range else 0
-    upside_to_top = ((box_top - current) / current * 100) if current else 0
-
-    return {
-        "signal":           signal,
-        "box_top":          round(box_top,    2),
-        "box_bottom":       round(box_bottom, 2),
-        "current_price":    round(current,    2),
-        "box_range":        round(box_range,  2),
-        "position_in_box_pct": round(pos_in_box,     1),
-        "upside_to_top_pct":   round(upside_to_top,  2),
-        "confirm_days":     confirm,
-        "data_points":      len(all_closes),
-    }
+    highs, lows, closes = ohlc_lists(df, *cols)
+    return report_darvas_box(highs, lows, closes, confirm,
+                             no_top_note="No confirmed Darvas top found in the look-back window.",
+                             no_bottom_note="Could not confirm a box bottom.")
 
 
 def display_darvas_box(result: dict):

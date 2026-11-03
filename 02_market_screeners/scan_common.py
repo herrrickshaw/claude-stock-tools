@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from pathlib import Path
-from typing import Any, NamedTuple, Optional
+from typing import Any, Callable, NamedTuple, Optional, Sequence
 
 import pandas as pd
 
@@ -174,3 +175,201 @@ def style_sheet(ws: Any, palette: SheetPalette) -> None:
     for col in ws.columns:
         max_len = max(len(str(cell.value or "")) for cell in col)
         ws.column_dimensions[get_column_letter(col[0].column)].width = max(max_len + 4, 12)
+
+
+# ── Darvas Box: one implementation of the box maths for every scanner and report ──────────────
+
+BOX_OK, BOX_NO_TOP, BOX_NO_BOTTOM = "ok", "no_top", "no_bottom"
+
+
+class DarvasBox(NamedTuple):
+    """Raw result of :func:`darvas_box`. Unrounded; each caller shapes it into its own output dict."""
+
+    status: str  # BOX_OK | BOX_NO_TOP | BOX_NO_BOTTOM
+    top: Optional[float]
+    bottom: Optional[float]
+    current: float
+    signal: Optional[str] = None  # BREAKOUT_BUY | BREAKDOWN_SELL | IN_BOX (status ok only)
+    box_range: Optional[float] = None
+    pos_in_box_pct: Optional[float] = None  # unrounded, percent of the box range
+    upside_to_top_pct: Optional[float] = None  # unrounded, percent of the current close
+
+
+def find_column(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
+    """First column whose name contains any of ``candidates`` (case-insensitive, candidates in priority order)."""
+    for cand in candidates:
+        match = next((col for col in df.columns if cand.upper() in col.upper()), None)
+        if match:
+            return match
+    return None
+
+
+def ohlc_lists(df: pd.DataFrame, h_col: str, l_col: str, c_col: str) -> tuple:
+    """(highs, lows, closes) as float lists with non-numeric values coerced to 0."""
+    return tuple(pd.to_numeric(df[c], errors="coerce").fillna(0).tolist() for c in (h_col, l_col, c_col))
+
+
+def darvas_box(highs: list, lows: list, closes: list, confirm: int) -> DarvasBox:
+    """Find the Darvas box and classify the last close against it.
+
+    The current (last) bar is excluded from box formation, so a spike or breakdown on it can never
+    become the box boundary. Inputs are equal-length lists, oldest first.
+    """
+    current = closes[-1]
+    hist_highs, hist_lows = highs[:-1], lows[:-1]
+
+    top_idx = top = None
+    for i in range(len(hist_highs) - confirm - 1, -1, -1):
+        cand = hist_highs[i]
+        if cand == 0:
+            continue
+        window = hist_highs[i + 1: i + 1 + confirm]
+        if len(window) == confirm and all(h < cand for h in window):
+            top_idx, top = i, cand
+            break
+    if top is None:
+        return DarvasBox(BOX_NO_TOP, None, None, current)
+
+    segment = hist_lows[top_idx:]
+    bottom = None
+    for i in range(len(segment) - confirm):
+        cand = segment[i]
+        if cand == 0:
+            continue
+        window = segment[i + 1: i + 1 + confirm]
+        if len(window) == confirm and all(low > cand for low in window):
+            bottom = cand
+            break
+    if bottom is None:
+        valid = [low for low in segment if low > 0]
+        bottom = min(valid) if valid else None
+    if bottom is None:
+        return DarvasBox(BOX_NO_BOTTOM, top, None, current)
+
+    signal = "BREAKOUT_BUY" if current > top else "BREAKDOWN_SELL" if current < bottom else "IN_BOX"
+    box_range = top - bottom
+    pos = ((current - bottom) / box_range * 100) if box_range else 0
+    upside = ((top - current) / current * 100) if current else 0
+    return DarvasBox(BOX_OK, top, bottom, current, signal, box_range, pos, upside)
+
+
+def compact_darvas_box(df: Optional[pd.DataFrame], confirm: int, ndigits: int) -> dict:
+    """Darvas result for the Europe/Japan/Korea scanners (needs ``High``/``Low``/``Close`` columns).
+
+    Prices are rounded to ``ndigits``; the keys are ``upside_pct``/``pos_in_box`` (the compact layout).
+    """
+    if df is None or df.empty or len(df) < confirm + 5:
+        return {"signal": "INSUFFICIENT_DATA", "box_top": None, "box_bottom": None}
+    highs, lows, closes = ohlc_lists(df, "High", "Low", "Close")
+    box = darvas_box(highs, lows, closes, confirm)
+    if box.status == BOX_NO_TOP:
+        return {"signal": "NO_BOX", "box_top": None, "box_bottom": None, "current_price": box.current}
+    if box.status == BOX_NO_BOTTOM:
+        return {"signal": "NO_BOX", "box_top": round(box.top, ndigits), "box_bottom": None,
+                "current_price": round(box.current, ndigits)}
+    return {
+        "signal": box.signal,
+        "box_top": round(box.top, ndigits),
+        "box_bottom": round(box.bottom, ndigits),
+        "current_price": round(box.current, ndigits),
+        "upside_pct": round(box.upside_to_top_pct, 2),
+        "pos_in_box": round(box.pos_in_box_pct, 1),
+        "data_points": len(closes),
+    }
+
+
+def full_box_result(box: DarvasBox, data_points: int, confirm: Optional[int] = None) -> dict:
+    """Output dict (``upside_to_top_pct``/``position_in_box_pct`` layout, 2-dp prices) for a classified box.
+
+    ``confirm`` adds the ``confirm_days`` key (used by the daily reports) just before ``data_points``.
+    """
+    result = {
+        "signal": box.signal,
+        "box_top": round(box.top, 2),
+        "box_bottom": round(box.bottom, 2),
+        "current_price": round(box.current, 2),
+        "box_range": round(box.box_range, 2),
+        "position_in_box_pct": round(box.pos_in_box_pct, 1),
+        "upside_to_top_pct": round(box.upside_to_top_pct, 2),
+    }
+    if confirm is not None:
+        result["confirm_days"] = confirm
+    result["data_points"] = data_points
+    return result
+
+
+def report_darvas_box(highs: list, lows: list, closes: list, confirm: int,
+                      no_top_note: str, no_bottom_note: str) -> dict:
+    """Darvas result for the daily reports: ``note`` explains a NO_BOX, unrounded ``box_top`` when no bottom."""
+    box = darvas_box(highs, lows, closes, confirm)
+    if box.status == BOX_NO_TOP:
+        return {"signal": "NO_BOX", "box_top": None, "box_bottom": None, "note": no_top_note}
+    if box.status == BOX_NO_BOTTOM:
+        return {"signal": "NO_BOX", "box_top": box.top, "box_bottom": None, "note": no_bottom_note}
+    return full_box_result(box, len(closes), confirm)
+
+
+# ── Per-row technicals shared by the scanners ─────────────────────────────────────────────────
+
+def price_change(closes: pd.Series, ndigits: int = 2) -> tuple:
+    """(last close, previous close, % change) rounded to ``ndigits``; each is None when unavailable."""
+    ltp = round(float(closes.iloc[-1]), ndigits) if not closes.empty else None
+    prev = round(float(closes.iloc[-2]), ndigits) if len(closes) >= 2 else None
+    chg_pct = round((ltp - prev) / prev * 100, 2) if (ltp and prev) else None
+    return ltp, prev, chg_pct
+
+
+def ma200_trend(closes: pd.Series, ltp: Optional[float], ndigits: int, no_history_label: str) -> tuple:
+    """(200-day MA, % distance of ``ltp`` from it, trend label); label is ``no_history_label`` when unknown."""
+    ma200 = round(closes.rolling(200).mean().iloc[-1], ndigits) if len(closes) >= 200 else None
+    dist = round((ltp - ma200) / ma200 * 100, 2) if (ma200 and ltp) else None
+    trend = ("Above 200MA (Uptrend)" if dist and dist > 5 else
+             "Below 200MA (Downtrend)" if dist and dist < -5 else
+             "Near 200MA (Consolidation)" if dist else no_history_label)
+    return ma200, dist, trend
+
+
+# ── Stage 4: fundamental scans on breakout candidates, in a thread pool ───────────────────────
+
+def run_fundamental_pool(candidates: list, scan: Callable, workers: int, build_row: Callable,
+                         is_triple: Callable, name_of: Callable, progress_fmt: str,
+                         every: int) -> tuple:
+    """Scan every candidate concurrently; returns ``(fund_rows, triple_rows)`` in completion order.
+
+    ``scan(candidate)`` does the (I/O-bound) fundamental scan, ``build_row(candidate, result)`` shapes the
+    output row and ``is_triple(result)`` marks Darvas + Piotroski + Coffee Can hits. A failure on one
+    candidate is printed and skipped. ``progress_fmt`` takes ``done``, ``total`` and ``triples``.
+    """
+    fund_rows, triple_rows = [], []
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(scan, cand): cand for cand in candidates}
+        for future in as_completed(futures):
+            cand = futures[future]
+            done += 1
+            try:
+                res = future.result()
+                fund_row = build_row(cand, res)
+                fund_rows.append(fund_row)
+                if is_triple(res):
+                    triple_rows.append(fund_row.copy())
+                if done % every == 0 or done == len(candidates):
+                    print(progress_fmt.format(done=done, total=len(candidates), triples=len(triple_rows)))
+            except Exception as e:  # one bad ticker must not abort the scan
+                print(f"    {name_of(cand)}: error — {e}")
+    return fund_rows, triple_rows
+
+
+def write_scan_workbook(path: Path, sheets: Sequence[tuple], style: Optional[Callable] = None) -> None:
+    """Write ``(sheet_name, rows, sort_col)`` triples to an xlsx at ``path``; sort descending when possible."""
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        for name, rows, sort_col in sheets:
+            if not rows:
+                pd.DataFrame().to_excel(writer, sheet_name=name, index=False)
+                continue
+            df = pd.DataFrame(rows)
+            if sort_col and sort_col in df.columns:
+                df = df.sort_values(sort_col, ascending=False)
+            df.to_excel(writer, sheet_name=name, index=False)
+            if style is not None:
+                style(writer.sheets[name])

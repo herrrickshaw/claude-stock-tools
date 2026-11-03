@@ -60,6 +60,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 import yfinance as yf
+from scan_common import BOX_NO_BOTTOM, BOX_NO_TOP, darvas_box, ohlc_lists  # sibling module (script dir on sys.path)
 
 try:
     from tqdm import tqdm
@@ -158,81 +159,33 @@ def fetch_stock_universe(exchange_filter: str = "all") -> pd.DataFrame:
 
 def _darvas_from_df(df: pd.DataFrame, confirm: int = DARVAS_CONFIRM) -> dict:
     """
-    Compute Darvas Box signal from a flat OHLC DataFrame.
+    Compute Darvas Box signal from a flat OHLC DataFrame (yf.download columns: Open, High, Low, Close).
 
-    Algorithm: scan historical bars (all except the last) to find the most
-    recent confirmed box top and bottom, then classify today's close.
-
-    KEY RULE: the current bar (last row) is excluded from box formation.
-    A breakdown bar would otherwise pull the box bottom to its own low,
-    making BREAKDOWN_SELL impossible to detect.
+    Scans historical bars (all except the last) for the most recent confirmed box top and bottom, then
+    classifies today's close. The current bar is excluded from box formation so a breakdown bar cannot
+    pull the box bottom to its own low.
 
     Returns dict with signal, box_top, box_bottom, current_price, upside_pct.
     """
     if df is None or df.empty or len(df) < confirm + 5:
         return {"signal": "INSUFFICIENT_DATA", "box_top": None, "box_bottom": None}
-
-    # yf.download columns: Open, High, Low, Close, Volume
     try:
-        highs  = pd.to_numeric(df["High"],  errors="coerce").fillna(0).tolist()
-        lows   = pd.to_numeric(df["Low"],   errors="coerce").fillna(0).tolist()
-        closes = pd.to_numeric(df["Close"], errors="coerce").fillna(0).tolist()
+        highs, lows, closes = ohlc_lists(df, "High", "Low", "Close")
     except KeyError:
         return {"signal": "INSUFFICIENT_DATA", "box_top": None, "box_bottom": None}
 
-    current = closes[-1]
-    highs_h = highs[:-1]    # historical only
-    lows_h  = lows[:-1]
-    n       = len(highs_h)
-
-    # Step 1 — find confirmed box top
-    box_top_idx = box_top = None
-    for i in range(n - confirm - 1, -1, -1):
-        c = highs_h[i]
-        if c == 0:
-            continue
-        window = highs_h[i + 1: i + 1 + confirm]
-        if len(window) == confirm and all(h < c for h in window):
-            box_top_idx, box_top = i, c
-            break
-
-    if box_top is None:
+    box = darvas_box(highs, lows, closes, confirm)
+    if box.status == BOX_NO_TOP:
         return {"signal": "NO_BOX", "box_top": None, "box_bottom": None}
-
-    # Step 2 — find confirmed box bottom (historical segment only)
-    seg        = lows_h[box_top_idx:]
-    box_bottom = None
-    for i in range(len(seg) - confirm):
-        c = seg[i]
-        if c == 0:
-            continue
-        window = seg[i + 1: i + 1 + confirm]
-        if len(window) == confirm and all(l > c for l in window):
-            box_bottom = c
-            break
-    if box_bottom is None:
-        valid = [l for l in seg if l > 0]
-        box_bottom = min(valid) if valid else None
-
-    if box_bottom is None:
-        return {"signal": "NO_BOX", "box_top": round(box_top, 2), "box_bottom": None}
-
-    # Step 3 — classify today's close
-    if   current > box_top:    signal = "BREAKOUT_BUY"
-    elif current < box_bottom: signal = "BREAKDOWN_SELL"
-    else:                      signal = "IN_BOX"
-
-    rng         = box_top - box_bottom
-    upside_pct  = (box_top - current) / current * 100 if current else 0
-    pos_in_box  = (current - box_bottom) / rng * 100 if rng else 0
-
+    if box.status == BOX_NO_BOTTOM:
+        return {"signal": "NO_BOX", "box_top": round(box.top, 2), "box_bottom": None}
     return {
-        "signal":        signal,
-        "box_top":       round(box_top,    2),
-        "box_bottom":    round(box_bottom, 2),
-        "current_price": round(current,    2),
-        "upside_pct":    round(upside_pct, 2),
-        "pos_in_box":    round(pos_in_box, 1),
+        "signal":        box.signal,
+        "box_top":       round(box.top,    2),
+        "box_bottom":    round(box.bottom, 2),
+        "current_price": round(box.current, 2),
+        "upside_pct":    round(box.upside_to_top_pct, 2),
+        "pos_in_box":    round(box.pos_in_box_pct, 1),
     }
 
 

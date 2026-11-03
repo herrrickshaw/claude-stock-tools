@@ -116,7 +116,7 @@ class BuffettScreener:
         """NYSE + NASDAQ via yfinance."""
         try:
             tickers = yf.get_tickers_sp500()  # Try S&P 500 first
-        except:
+        except Exception:  # yfinance has no get_tickers_sp500; fall through to the next source
             tickers = []
 
         if not tickers:

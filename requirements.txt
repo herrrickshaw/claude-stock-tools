@@ -1,0 +1,5 @@
+pandas
+requests
+yfinance
+openpyxl
+# per-market extras: nsepython bseindia (India), kabupy (Japan), pykrx (Korea)

@@ -1,0 +1,154 @@
+{
+ "breakdown/2": {
+  "box_bottom": 9,
+  "box_range": 5,
+  "box_top": 14,
+  "current_price": 1,
+  "data_points": 20,
+  "position_in_box_pct": -160.0,
+  "signal": "BREAKDOWN_SELL",
+  "upside_to_top_pct": 1300.0
+ },
+ "breakdown/3": {
+  "box_bottom": 9,
+  "box_range": 5,
+  "box_top": 14,
+  "current_price": 1,
+  "data_points": 20,
+  "position_in_box_pct": -160.0,
+  "signal": "BREAKDOWN_SELL",
+  "upside_to_top_pct": 1300.0
+ },
+ "breakout/2": {
+  "box_bottom": 9,
+  "box_range": 5,
+  "box_top": 14,
+  "current_price": 99,
+  "data_points": 20,
+  "position_in_box_pct": 1800.0,
+  "signal": "BREAKOUT_BUY",
+  "upside_to_top_pct": -85.86
+ },
+ "breakout/3": {
+  "box_bottom": 9,
+  "box_range": 5,
+  "box_top": 14,
+  "current_price": 99,
+  "data_points": 20,
+  "position_in_box_pct": 1800.0,
+  "signal": "BREAKOUT_BUY",
+  "upside_to_top_pct": -85.86
+ },
+ "empty/2": {
+  "box_bottom": null,
+  "box_top": null,
+  "signal": "INSUFFICIENT_DATA"
+ },
+ "empty/3": {
+  "box_bottom": null,
+  "box_top": null,
+  "signal": "INSUFFICIENT_DATA"
+ },
+ "in_box/2": {
+  "box_bottom": 9,
+  "box_range": 5,
+  "box_top": 14,
+  "current_price": 11,
+  "data_points": 20,
+  "position_in_box_pct": 40.0,
+  "signal": "IN_BOX",
+  "upside_to_top_pct": 27.27
+ },
+ "in_box/3": {
+  "box_bottom": 9,
+  "box_range": 5,
+  "box_top": 14,
+  "current_price": 11,
+  "data_points": 20,
+  "position_in_box_pct": 40.0,
+  "signal": "IN_BOX",
+  "upside_to_top_pct": 27.27
+ },
+ "missing_cols/2": {
+  "box_bottom": null,
+  "box_top": null,
+  "signal": "INSUFFICIENT_DATA"
+ },
+ "missing_cols/3": {
+  "box_bottom": null,
+  "box_top": null,
+  "signal": "INSUFFICIENT_DATA"
+ },
+ "nan/2": {
+  "box_bottom": 9,
+  "box_range": 6.0,
+  "box_top": 15.0,
+  "current_price": 11,
+  "data_points": 20,
+  "position_in_box_pct": 33.3,
+  "signal": "IN_BOX",
+  "upside_to_top_pct": 36.36
+ },
+ "nan/3": {
+  "box_bottom": 9,
+  "box_range": 6.0,
+  "box_top": 15.0,
+  "current_price": 11,
+  "data_points": 20,
+  "position_in_box_pct": 33.3,
+  "signal": "IN_BOX",
+  "upside_to_top_pct": 36.36
+ },
+ "no_bottom/2": {
+  "box_bottom": null,
+  "box_top": 14,
+  "current_price": 11,
+  "signal": "NO_BOX"
+ },
+ "no_bottom/3": {
+  "box_bottom": null,
+  "box_top": 14,
+  "current_price": 11,
+  "signal": "NO_BOX"
+ },
+ "no_box/2": {
+  "box_bottom": null,
+  "box_top": null,
+  "current_price": 29,
+  "signal": "NO_BOX"
+ },
+ "no_box/3": {
+  "box_bottom": null,
+  "box_top": null,
+  "current_price": 29,
+  "signal": "NO_BOX"
+ },
+ "none/2": {
+  "raises": "AttributeError"
+ },
+ "none/3": {
+  "raises": "AttributeError"
+ },
+ "short/2": {
+  "box_bottom": null,
+  "box_top": null,
+  "signal": "INSUFFICIENT_DATA"
+ },
+ "short/3": {
+  "box_bottom": null,
+  "box_top": null,
+  "signal": "INSUFFICIENT_DATA"
+ },
+ "zeros/2": {
+  "box_bottom": null,
+  "box_top": null,
+  "current_price": 11,
+  "signal": "NO_BOX"
+ },
+ "zeros/3": {
+  "box_bottom": null,
+  "box_top": null,
+  "current_price": 11,
+  "signal": "NO_BOX"
+ }
+}

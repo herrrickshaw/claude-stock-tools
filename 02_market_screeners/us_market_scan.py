@@ -47,9 +47,14 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import requests
+from scan_common import (  # sibling module; the script dir is on sys.path
+    BOX_OK, darvas_box, find_column, full_box_result, ohlc_lists,
+    first_df as _first_df, piotroski_f_score, price_change, read_cache, run_fundamental_pool, write_cache,
+)
 
 try:
     import yfinance as yf
@@ -82,21 +87,14 @@ _SYMBOL_CACHE = DOWNLOAD_DIR / ".symbols_cache.json"
 
 
 def _load_symbol_cache():
-    try:
-        if _SYMBOL_CACHE.exists():
-            data = json.loads(_SYMBOL_CACHE.read_text())
-            if time.time() - data.get("ts", 0) < SYMBOL_CACHE_TTL:
-                return data.get("nasdaq", []), data.get("nyse", [])
-    except Exception:
-        pass
+    data = read_cache(_SYMBOL_CACHE, SYMBOL_CACHE_TTL)
+    if data is not None:
+        return data.get("nasdaq", []), data.get("nyse", [])
     return None, None
 
 
 def _save_symbol_cache(nasdaq_syms, nyse_syms):
-    try:
-        _SYMBOL_CACHE.write_text(json.dumps({"ts": time.time(), "nasdaq": nasdaq_syms, "nyse": nyse_syms}))
-    except Exception:
-        pass
+    write_cache(_SYMBOL_CACHE, nasdaq=nasdaq_syms, nyse=nyse_syms)
 
 
 # ── Symbol fetch ───────────────────────────────────────────────────────────────
@@ -345,101 +343,19 @@ def bulk_download_ohlc(tickers: list[str], period: str = "3mo") -> dict[str, pd.
 
 def compute_darvas_box(df: pd.DataFrame, confirm: int = DARVAS_CONFIRM) -> dict:
     """Darvas Box detection. Current bar excluded from box formation."""
-    def find_col(df, candidates):
-        for c in candidates:
-            m = next((col for col in df.columns if c.upper() in col.upper()), None)
-            if m:
-                return m
-        return None
-
-    h_col = find_col(df, ["High"])
-    l_col = find_col(df, ["Low"])
-    c_col = find_col(df, ["Close"])
-
-    if not all([h_col, l_col, c_col]) or len(df) < confirm + 5:
+    cols = [find_column(df, c) for c in (("High",), ("Low",), ("Close",))]
+    if not all(cols) or len(df) < confirm + 5:
         return {"signal": "INSUFFICIENT_DATA", "box_top": None, "box_bottom": None}
 
-    all_highs  = pd.to_numeric(df[h_col], errors="coerce").fillna(0).tolist()
-    all_lows   = pd.to_numeric(df[l_col], errors="coerce").fillna(0).tolist()
-    all_closes = pd.to_numeric(df[c_col], errors="coerce").fillna(0).tolist()
-
-    current = all_closes[-1]
-    highs   = all_highs[:-1]
-    lows    = all_lows[:-1]
-    n       = len(highs)
-
-    box_top_idx, box_top = None, None
-    for i in range(n - confirm - 1, -1, -1):
-        candidate = highs[i]
-        if candidate == 0:
-            continue
-        window = highs[i + 1: i + 1 + confirm]
-        if len(window) == confirm and all(h < candidate for h in window):
-            box_top_idx, box_top = i, candidate
-            break
-
-    if box_top is None:
-        return {"signal": "NO_BOX", "box_top": None, "box_bottom": None,
-                "current_price": round(current, 2)}
-
-    segment    = lows[box_top_idx:]
-    box_bottom = None
-    for i in range(len(segment) - confirm):
-        candidate = segment[i]
-        if candidate == 0:
-            continue
-        window = segment[i + 1: i + 1 + confirm]
-        if len(window) == confirm and all(l > candidate for l in window):
-            box_bottom = candidate
-            break
-
-    if box_bottom is None:
-        valid = [l for l in segment if l > 0]
-        box_bottom = min(valid) if valid else None
-
-    if box_bottom is None:
-        return {"signal": "NO_BOX", "box_top": round(box_top, 2), "box_bottom": None,
-                "current_price": round(current, 2)}
-
-    signal = ("BREAKOUT_BUY" if current > box_top else
-              "BREAKDOWN_SELL" if current < box_bottom else "IN_BOX")
-    box_range     = box_top - box_bottom
-    upside_to_top = ((box_top - current) / current * 100) if current else 0
-    pos_in_box    = ((current - box_bottom) / box_range * 100) if box_range else 0
-
-    return {
-        "signal":              signal,
-        "box_top":             round(box_top,    2),
-        "box_bottom":          round(box_bottom, 2),
-        "current_price":       round(current,    2),
-        "box_range":           round(box_range,  2),
-        "upside_to_top_pct":   round(upside_to_top, 2),
-        "position_in_box_pct": round(pos_in_box,    1),
-        "data_points":         len(all_closes),
-    }
+    highs, lows, closes = ohlc_lists(df, *cols)
+    box = darvas_box(highs, lows, closes, confirm)
+    if box.status != BOX_OK:
+        return {"signal": "NO_BOX", "box_top": None if box.top is None else round(box.top, 2),
+                "box_bottom": None, "current_price": round(box.current, 2)}
+    return full_box_result(box, len(closes))
 
 
 # ── Fundamental scan ───────────────────────────────────────────────────────────
-
-def _first_df(ticker, *attrs):
-    for attr in attrs:
-        df = getattr(ticker, attr, None)
-        if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
-            return df
-    return None
-
-
-def _row(df, *row_names, col: int = 0):
-    if df is None or df.empty:
-        return None
-    for name in row_names:
-        if name in df.index:
-            try:
-                val = df.loc[name].iloc[col]
-                return float(val) if pd.notna(val) else None
-            except Exception:
-                pass
-    return None
 
 
 def fundamental_scan(symbol: str) -> dict:
@@ -458,36 +374,7 @@ def fundamental_scan(symbol: str) -> dict:
         return {"symbol": symbol, "f_score": None, "qualifies": False, "error": str(e)}
 
     # ── Piotroski F-Score ─────────────────────────────────────────────────────
-    ni0 = _row(inc, "Net Income", col=0);  a0 = _row(bal, "Total Assets", col=0)
-    ni1 = _row(inc, "Net Income", col=1);  a1 = _row(bal, "Total Assets", col=1)
-    roa0 = (ni0 / a0) if (ni0 and a0) else None
-    roa1 = (ni1 / a1) if (ni1 and a1) else None
-    ocf0 = _row(cf, "Operating Cash Flow", "Total Cash From Operating Activities")
-
-    f1 = 1 if (roa0 and roa0 > 0) else 0
-    f2 = 1 if (ocf0 and ocf0 > 0) else 0
-    f3 = 1 if (roa0 and roa1 and roa0 > roa1) else 0
-    f4 = 1 if (ocf0 and a0 and roa0 and (ocf0/a0) > roa0) else 0
-
-    ltd0 = _row(bal, "Long Term Debt", col=0) or 0
-    ltd1 = _row(bal, "Long Term Debt", col=1) or 0
-    f5 = 1 if (a0 and a1 and (ltd0/a0) < (ltd1/a1)) else 0
-
-    ca0 = _row(bal, "Current Assets", "Total Current Assets", col=0)
-    cl0 = _row(bal, "Current Liabilities", "Total Current Liabilities", col=0)
-    ca1 = _row(bal, "Current Assets", "Total Current Assets", col=1)
-    cl1 = _row(bal, "Current Liabilities", "Total Current Liabilities", col=1)
-    f6 = 1 if (ca0 and cl0 and ca1 and cl1 and (ca0/cl0) > (ca1/cl1)) else 0
-
-    sh0 = _row(bal, "Share Issued", col=0);  sh1 = _row(bal, "Share Issued", col=1)
-    f7 = (1 if sh0 <= sh1 else 0) if (sh0 and sh1) else 1
-
-    rev0 = _row(inc, "Total Revenue", col=0);  gp0 = _row(inc, "Gross Profit", col=0)
-    rev1 = _row(inc, "Total Revenue", col=1);  gp1 = _row(inc, "Gross Profit", col=1)
-    f8 = 1 if (gp0 and rev0 and gp1 and rev1 and (gp0/rev0) > (gp1/rev1)) else 0
-    f9 = 1 if (rev0 and a0 and rev1 and a1 and (rev0/a0) > (rev1/a1)) else 0
-
-    f_score = f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9
+    f_score = piotroski_f_score(inc, bal, cf)
 
     # ── US Coffee Can — skip when Piotroski < 7 ───────────────────────────────
     if f_score < 7:
@@ -581,15 +468,8 @@ def save_excel(all_rows, darvas_rows, fund_rows, triple_rows, tag="us"):
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def main(nasdaq_only: bool = False, top: int = 0, run_scans: bool = True,
-         workers: int = MAX_WORKERS, min_price: float = 1.0):
-
-    print(f"\n{'#'*60}")
-    print(f"  FULL US MARKET SCAN")
-    print(f"  Started: {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
-    print(f"{'#'*60}\n")
-
-    # ── Stage 1: symbol lists (cached for 24 h) ──────────────────────────────
+def _load_universe(nasdaq_only: bool, top: int) -> list:
+    """Stage 1: de-duplicated NASDAQ + NYSE symbols (24 h cache, else fetched and cached), limited to ``top``."""
     print("Stage 1 — Fetching symbol lists …")
     nasdaq_syms, nyse_syms = _load_symbol_cache()
     if nasdaq_syms is None:
@@ -617,106 +497,83 @@ def main(nasdaq_only: bool = False, top: int = 0, run_scans: bool = True,
         print(f"  (limited to first {top} symbols)")
 
     print(f"  Total unique symbols: {len(all_symbols)}\n")
+    return all_symbols
 
-    # ── Stage 2: bulk OHLC download ──────────────────────────────────────────
-    print("Stage 2 — Bulk OHLC download (3-month window) …")
-    ohlc_data = bulk_download_ohlc(all_symbols, period="3mo")
-    print(f"  → {len(ohlc_data)} tickers with usable data\n")
 
-    # ── Stage 3: Darvas Box + price filter ───────────────────────────────────
-    print("Stage 3 — Darvas Box screen …")
-    all_rows, darvas_rows, breakout_symbols = [], [], []
+def _build_base_row(ticker: str, df: pd.DataFrame, min_price: float) -> Optional[dict]:
+    """Stage-3 row for one ticker, or None when it has no closes or trades below ``min_price``."""
+    closes = pd.to_numeric(df["Close"], errors="coerce").dropna()
+    if closes.empty:
+        return None
+    ltp, prev, _ = price_change(closes, 2)
+    if ltp < min_price:
+        return None
+    chg_pct = round((ltp - prev) / prev * 100, 2) if prev else None  # a zero last close still has a change
+    result = compute_darvas_box(df)
+    return {
+        "Symbol":           ticker,
+        "LTP":              ltp,
+        "Prev_Close":       prev,
+        "Change%":          chg_pct,
+        "Darvas_Signal":    result.get("signal"),
+        "Box_Top":          result.get("box_top"),
+        "Box_Bottom":       result.get("box_bottom"),
+        "Upside_to_Top%":   result.get("upside_to_top_pct"),
+        "Position_in_Box%": result.get("position_in_box_pct"),
+        "Data_Points":      result.get("data_points"),
+    }
 
-    for ticker, df in ohlc_data.items():
-        closes = pd.to_numeric(df["Close"], errors="coerce").dropna()
-        if closes.empty:
-            continue
-        ltp  = round(float(closes.iloc[-1]), 2)
-        if ltp < min_price:
-            continue
-        prev    = round(float(closes.iloc[-2]), 2) if len(closes) >= 2 else None
-        chg_pct = round((ltp - prev) / prev * 100, 2) if (prev and prev) else None
 
-        result  = compute_darvas_box(df)
-        base_row = {
-            "Symbol":           ticker,
-            "LTP":              ltp,
-            "Prev_Close":       prev,
-            "Change%":          chg_pct,
-            "Darvas_Signal":    result.get("signal"),
-            "Box_Top":          result.get("box_top"),
-            "Box_Bottom":       result.get("box_bottom"),
-            "Upside_to_Top%":   result.get("upside_to_top_pct"),
-            "Position_in_Box%": result.get("position_in_box_pct"),
-            "Data_Points":      result.get("data_points"),
-        }
-        all_rows.append(base_row)
+def _screen_darvas(ohlc_data: dict, min_price: float) -> tuple:
+    """Stage 3: (all_rows, darvas_rows, breakout_symbols) for tickers priced at or above ``min_price``."""
+    rows = (_build_base_row(ticker, df, min_price) for ticker, df in ohlc_data.items())
+    all_rows = [r for r in rows if r is not None]
+    darvas_rows = [r.copy() for r in all_rows if r["Darvas_Signal"] in ("BREAKOUT_BUY", "BREAKDOWN_SELL")]
+    breakout_symbols = [r["Symbol"] for r in all_rows if r["Darvas_Signal"] == "BREAKOUT_BUY"]
+    return all_rows, darvas_rows, breakout_symbols
 
-        if result.get("signal") in ("BREAKOUT_BUY", "BREAKDOWN_SELL"):
-            darvas_rows.append(base_row.copy())
-        if result.get("signal") == "BREAKOUT_BUY":
-            breakout_symbols.append(ticker)
 
-    breakdowns = sum(1 for r in darvas_rows if r["Darvas_Signal"] == "BREAKDOWN_SELL")
-    print(f"  Breakout BUY:  {len(breakout_symbols)}")
-    print(f"  Breakdown SELL:{breakdowns}")
-    print(f"  In Box:        {len(all_rows) - len(darvas_rows)}")
+def _fund_row(sym: str, dr: dict, res: dict) -> dict:
+    """Stage-4 row: the technical context of a breakout joined with its fundamental scan result."""
+    return {
+        "Symbol":          sym,
+        "Name":            res.get("name", ""),
+        "Sector":          res.get("sector", ""),
+        "LTP":             dr.get("LTP"),
+        "Change%":         dr.get("Change%"),
+        "Darvas_Signal":   dr.get("Darvas_Signal"),
+        "Upside_to_Top%":  dr.get("Upside_to_Top%"),
+        "Piotroski_Score": res.get("f_score"),
+        "Piotroski_Strong": "YES" if res.get("f_strong") else "NO",
+        "CoffeeCan":       "PASS" if res.get("qualifies") else "FAIL",
+        "CC_Score":        res.get("cc_score"),
+        "Error":           res.get("error", ""),
+    }
 
-    # ── Stage 4: Fundamental scans on breakout candidates ────────────────────
-    fund_rows, triple_rows = [], []
 
-    if run_scans and breakout_symbols:
-        if len(breakout_symbols) > MAX_FUND_CANDIDATES:
-            darvas_idx = {r["Symbol"]: r.get("Upside_to_Top%") for r in darvas_rows}
-            breakout_symbols = sorted(
-                breakout_symbols,
-                key=lambda s: abs(darvas_idx.get(s) or 999)
-            )[:MAX_FUND_CANDIDATES]
-            print(f"  (pre-filtered to {MAX_FUND_CANDIDATES} freshest breakouts)")
+def _scan_fundamentals(breakout_symbols: list, darvas_rows: list, workers: int) -> tuple:
+    """Stage 4: (candidates, fund_rows, triple_rows) for the freshest breakouts (capped at MAX_FUND_CANDIDATES)."""
+    if len(breakout_symbols) > MAX_FUND_CANDIDATES:
+        darvas_idx = {r["Symbol"]: r.get("Upside_to_Top%") for r in darvas_rows}
+        breakout_symbols = sorted(
+            breakout_symbols,
+            key=lambda s: abs(darvas_idx.get(s) or 999)
+        )[:MAX_FUND_CANDIDATES]
+        print(f"  (pre-filtered to {MAX_FUND_CANDIDATES} freshest breakouts)")
 
-        print(f"\nStage 4 — Fundamental scans on {len(breakout_symbols)} breakout candidates "
-              f"({workers} workers) …")
-        done = 0
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(fundamental_scan, sym): sym for sym in breakout_symbols}
-            for future in as_completed(futures):
-                sym  = futures[future]
-                done += 1
-                try:
-                    res = future.result()
-                    dr  = next((r for r in darvas_rows if r["Symbol"] == sym), {})
-                    fund_row = {
-                        "Symbol":          sym,
-                        "Name":            res.get("name", ""),
-                        "Sector":          res.get("sector", ""),
-                        "LTP":             dr.get("LTP"),
-                        "Change%":         dr.get("Change%"),
-                        "Darvas_Signal":   dr.get("Darvas_Signal"),
-                        "Upside_to_Top%":  dr.get("Upside_to_Top%"),
-                        "Piotroski_Score": res.get("f_score"),
-                        "Piotroski_Strong": "YES" if res.get("f_strong") else "NO",
-                        "CoffeeCan":       "PASS" if res.get("qualifies") else "FAIL",
-                        "CC_Score":        res.get("cc_score"),
-                        "Error":           res.get("error", ""),
-                    }
-                    fund_rows.append(fund_row)
+    print(f"\nStage 4 — Fundamental scans on {len(breakout_symbols)} breakout candidates "
+          f"({workers} workers) …")
+    fund_rows, triple_rows = run_fundamental_pool(
+        breakout_symbols, lambda sym: fundamental_scan(sym), workers,
+        build_row=lambda sym, res: _fund_row(sym, next((r for r in darvas_rows if r["Symbol"] == sym), {}), res),
+        is_triple=lambda res: res.get("f_strong") and res.get("qualifies"),
+        name_of=str,
+        progress_fmt="    {done}/{total} done  (triple hits so far: {triples})", every=20)
+    return breakout_symbols, fund_rows, triple_rows
 
-                    if res.get("f_strong") and res.get("qualifies"):
-                        triple_rows.append(fund_row.copy())
 
-                    if done % 20 == 0 or done == len(breakout_symbols):
-                        print(f"    {done}/{len(breakout_symbols)} done  "
-                              f"(triple hits so far: {len(triple_rows)})")
-                except Exception as e:
-                    print(f"    {sym}: error — {e}")
-    else:
-        print("\nStage 4 — Skipped (--no-scans or no breakouts)")
-
-    # ── Stage 5: Save results ─────────────────────────────────────────────────
-    print("\nStage 5 — Saving results …")
-    path = save_excel(all_rows, darvas_rows, fund_rows, triple_rows, tag="us")
-
-    # Summary
+def _print_summary(all_rows, breakout_symbols, fund_rows, triple_rows) -> None:
+    """Print the closing banner and the triple-hit list."""
     print(f"\n{'='*60}")
     print(f"  SCAN COMPLETE — {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
     print(f"  Tickers scanned:     {len(all_rows)}")
@@ -730,6 +587,43 @@ def main(nasdaq_only: bool = False, top: int = 0, run_scans: bool = True,
                   f"F={r['Piotroski_Score']}/9  CC={r['CC_Score']}  "
                   f"LTP=${r['LTP']}  +{r['Upside_to_Top%']}% to box top")
     print(f"{'='*60}\n")
+
+
+def main(nasdaq_only: bool = False, top: int = 0, run_scans: bool = True,
+         workers: int = MAX_WORKERS, min_price: float = 1.0):
+
+    print(f"\n{'#'*60}")
+    print(f"  FULL US MARKET SCAN")
+    print(f"  Started: {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
+    print(f"{'#'*60}\n")
+
+    # ── Stage 1: symbol lists (cached for 24 h) ──────────────────────────────
+    all_symbols = _load_universe(nasdaq_only, top)
+
+    # ── Stage 2: bulk OHLC download ──────────────────────────────────────────
+    print("Stage 2 — Bulk OHLC download (3-month window) …")
+    ohlc_data = bulk_download_ohlc(all_symbols, period="3mo")
+    print(f"  → {len(ohlc_data)} tickers with usable data\n")
+
+    # ── Stage 3: Darvas Box + price filter ───────────────────────────────────
+    print("Stage 3 — Darvas Box screen …")
+    all_rows, darvas_rows, breakout_symbols = _screen_darvas(ohlc_data, min_price)
+    breakdowns = sum(1 for r in darvas_rows if r["Darvas_Signal"] == "BREAKDOWN_SELL")
+    print(f"  Breakout BUY:  {len(breakout_symbols)}")
+    print(f"  Breakdown SELL:{breakdowns}")
+    print(f"  In Box:        {len(all_rows) - len(darvas_rows)}")
+
+    # ── Stage 4: Fundamental scans on breakout candidates ────────────────────
+    if run_scans and breakout_symbols:
+        breakout_symbols, fund_rows, triple_rows = _scan_fundamentals(breakout_symbols, darvas_rows, workers)
+    else:
+        fund_rows, triple_rows = [], []
+        print("\nStage 4 — Skipped (--no-scans or no breakouts)")
+
+    # ── Stage 5: Save results ─────────────────────────────────────────────────
+    print("\nStage 5 — Saving results …")
+    path = save_excel(all_rows, darvas_rows, fund_rows, triple_rows, tag="us")
+    _print_summary(all_rows, breakout_symbols, fund_rows, triple_rows)
     return {"triple_hits": triple_rows, "breakouts": len(breakout_symbols),
             "total_scanned": len(all_rows), "excel_path": str(path)}
 

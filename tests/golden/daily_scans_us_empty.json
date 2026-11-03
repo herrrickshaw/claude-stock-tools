@@ -1,0 +1,10 @@
+{
+ "coffee_can": {
+  "error": "No income statement data available",
+  "symbol": "AAPL"
+ },
+ "piotroski": {
+  "error": "No income statement data available",
+  "symbol": "AAPL"
+ }
+}

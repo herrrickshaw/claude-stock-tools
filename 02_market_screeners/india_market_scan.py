@@ -35,6 +35,10 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+from scan_common import (  # sibling module; the script dir is on sys.path
+    BOX_NO_BOTTOM, BOX_NO_TOP, darvas_box, find_column, full_box_result, ohlc_lists,
+    first_df as _first_df, piotroski_f_score, price_change, read_cache, run_fundamental_pool, write_cache,
+)
 
 try:
     from nsepython import get_bhavcopy as _nse_get_bhavcopy
@@ -66,27 +70,18 @@ SYMBOL_CACHE_TTL  = 86400 # seconds — refresh symbol lists once per day
 
 
 # ── Symbol list caching ────────────────────────────────────────────────────────
-import json as _json
-
 _SYMBOL_CACHE = DOWNLOAD_DIR / ".symbols_cache.json"
 
 
 def _load_symbol_cache():
-    try:
-        if _SYMBOL_CACHE.exists():
-            data = _json.loads(_SYMBOL_CACHE.read_text())
-            if time.time() - data.get("ts", 0) < SYMBOL_CACHE_TTL:
-                return data.get("nse", []), data.get("bse_only", [])
-    except Exception:
-        pass
+    data = read_cache(_SYMBOL_CACHE, SYMBOL_CACHE_TTL)
+    if data is not None:
+        return data.get("nse", []), data.get("bse_only", [])
     return None, None
 
 
 def _save_symbol_cache(nse_syms, bse_syms):
-    try:
-        _SYMBOL_CACHE.write_text(_json.dumps({"ts": time.time(), "nse": nse_syms, "bse_only": bse_syms}))
-    except Exception:
-        pass
+    write_cache(_SYMBOL_CACHE, nse=nse_syms, bse_only=bse_syms)
 
 
 # ── Symbol fetch ───────────────────────────────────────────────────────────────
@@ -206,103 +201,22 @@ def bulk_download_ohlc(tickers: list[str], period: str = "3mo") -> dict[str, pd.
 
 def compute_darvas_box(df: pd.DataFrame, confirm: int = DARVAS_CONFIRM) -> dict:
     """Detect Darvas Box and classify current price. Current bar excluded from box formation."""
-    def find_col(df, candidates):
-        for c in candidates:
-            match = next((col for col in df.columns if c.upper() in col.upper()), None)
-            if match:
-                return match
-        return None
-
-    h_col = find_col(df, ["High",  "CH_TRADE_HIGH_PRICE"])
-    l_col = find_col(df, ["Low",   "CH_TRADE_LOW_PRICE"])
-    c_col = find_col(df, ["Close", "CH_CLOSING_PRICE"])
-
-    if not all([h_col, l_col, c_col]) or len(df) < confirm + 5:
+    cols = [find_column(df, c) for c in (("High", "CH_TRADE_HIGH_PRICE"), ("Low", "CH_TRADE_LOW_PRICE"),
+                                         ("Close", "CH_CLOSING_PRICE"))]
+    if not all(cols) or len(df) < confirm + 5:
         return {"signal": "INSUFFICIENT_DATA", "box_top": None, "box_bottom": None}
 
-    all_highs  = pd.to_numeric(df[h_col], errors="coerce").fillna(0).tolist()
-    all_lows   = pd.to_numeric(df[l_col], errors="coerce").fillna(0).tolist()
-    all_closes = pd.to_numeric(df[c_col], errors="coerce").fillna(0).tolist()
-
-    current = all_closes[-1]
-    highs   = all_highs[:-1]
-    lows    = all_lows[:-1]
-    n       = len(highs)
-
-    box_top_idx = None
-    box_top     = None
-    for i in range(n - confirm - 1, -1, -1):
-        candidate = highs[i]
-        if candidate == 0:
-            continue
-        window = highs[i + 1: i + 1 + confirm]
-        if len(window) == confirm and all(h < candidate for h in window):
-            box_top_idx = i
-            box_top     = candidate
-            break
-
-    if box_top is None:
-        return {"signal": "NO_BOX", "box_top": None, "box_bottom": None, "current_price": current}
-
-    segment    = lows[box_top_idx:]
-    box_bottom = None
-    for i in range(len(segment) - confirm):
-        candidate = segment[i]
-        if candidate == 0:
-            continue
-        window = segment[i + 1: i + 1 + confirm]
-        if len(window) == confirm and all(l > candidate for l in window):
-            box_bottom = candidate
-            break
-
-    if box_bottom is None:
-        valid = [l for l in segment if l > 0]
-        box_bottom = min(valid) if valid else None
-
-    if box_bottom is None:
-        return {"signal": "NO_BOX", "box_top": round(box_top, 2), "box_bottom": None,
-                "current_price": round(current, 2)}
-
-    signal = ("BREAKOUT_BUY" if current > box_top else
-              "BREAKDOWN_SELL" if current < box_bottom else "IN_BOX")
-
-    box_range     = box_top - box_bottom
-    pos_in_box    = ((current - box_bottom) / box_range * 100) if box_range else 0
-    upside_to_top = ((box_top - current) / current * 100) if current else 0
-
-    return {
-        "signal":              signal,
-        "box_top":             round(box_top,    2),
-        "box_bottom":          round(box_bottom, 2),
-        "current_price":       round(current,    2),
-        "box_range":           round(box_range,  2),
-        "position_in_box_pct": round(pos_in_box,    1),
-        "upside_to_top_pct":   round(upside_to_top, 2),
-        "data_points":         len(all_closes),
-    }
+    highs, lows, closes = ohlc_lists(df, *cols)
+    box = darvas_box(highs, lows, closes, confirm)
+    if box.status == BOX_NO_TOP:
+        return {"signal": "NO_BOX", "box_top": None, "box_bottom": None, "current_price": box.current}
+    if box.status == BOX_NO_BOTTOM:
+        return {"signal": "NO_BOX", "box_top": round(box.top, 2), "box_bottom": None,
+                "current_price": round(box.current, 2)}
+    return full_box_result(box, len(closes))
 
 
 # ── Piotroski F-Score ─────────────────────────────────────────────────────────
-
-def _first_df(ticker, *attrs):
-    for attr in attrs:
-        df = getattr(ticker, attr, None)
-        if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
-            return df
-    return None
-
-
-def _row(df, *row_names, col: int = 0):
-    if df is None or df.empty:
-        return None
-    for name in row_names:
-        if name in df.index:
-            try:
-                val = df.loc[name].iloc[col]
-                return float(val) if pd.notna(val) else None
-            except Exception:
-                pass
-    return None
 
 
 def fundamental_scan(symbol: str, yf_suffix: str = ".NS") -> dict:
@@ -322,37 +236,7 @@ def fundamental_scan(symbol: str, yf_suffix: str = ".NS") -> dict:
         return {"symbol": symbol, "f_score": None, "qualifies": False, "error": str(e)}
 
     # ── Piotroski F-Score ─────────────────────────────────────────────────────
-    ni0 = _row(inc, "Net Income", col=0);  a0 = _row(bal, "Total Assets", col=0)
-    ni1 = _row(inc, "Net Income", col=1);  a1 = _row(bal, "Total Assets", col=1)
-    roa0 = (ni0 / a0) if (ni0 and a0) else None
-    roa1 = (ni1 / a1) if (ni1 and a1) else None
-    ocf0 = _row(cf, "Operating Cash Flow", "Total Cash From Operating Activities")
-
-    f1 = 1 if (roa0 and roa0 > 0) else 0
-    f2 = 1 if (ocf0 and ocf0 > 0) else 0
-    f3 = 1 if (roa0 and roa1 and roa0 > roa1) else 0
-    f4 = 1 if (ocf0 and a0 and roa0 and (ocf0 / a0) > roa0) else 0
-
-    ltd0 = _row(bal, "Long Term Debt", col=0) or 0
-    ltd1 = _row(bal, "Long Term Debt", col=1) or 0
-    f5 = 1 if (a0 and a1 and (ltd0/a0) < (ltd1/a1)) else 0
-
-    ca0 = _row(bal, "Current Assets", "Total Current Assets", col=0)
-    cl0 = _row(bal, "Current Liabilities", "Total Current Liabilities", col=0)
-    ca1 = _row(bal, "Current Assets", "Total Current Assets", col=1)
-    cl1 = _row(bal, "Current Liabilities", "Total Current Liabilities", col=1)
-    f6 = 1 if (ca0 and cl0 and ca1 and cl1 and (ca0/cl0) > (ca1/cl1)) else 0
-
-    sh0 = _row(bal, "Share Issued", col=0);  sh1 = _row(bal, "Share Issued", col=1)
-    f7 = (1 if sh0 <= sh1 else 0) if (sh0 and sh1) else 1
-
-    rev0 = _row(inc, "Total Revenue", col=0);  gp0 = _row(inc, "Gross Profit", col=0)
-    rev1 = _row(inc, "Total Revenue", col=1);  gp1 = _row(inc, "Gross Profit", col=1)
-    f8 = 1 if (gp0 and rev0 and gp1 and rev1 and (gp0/rev0) > (gp1/rev1)) else 0
-
-    f9 = 1 if (rev0 and a0 and rev1 and a1 and (rev0/a0) > (rev1/a1)) else 0
-
-    f_score = f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9
+    f_score = piotroski_f_score(inc, bal, cf)
 
     # ── Coffee Can — skip entirely when Piotroski < 7 ─────────────────────────
     if f_score < 7:
@@ -433,15 +317,8 @@ def save_excel(all_rows, darvas_rows, fund_rows, triple_rows, tag="indian"):
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def main(nse_only: bool = False, top: int = 0, run_scans: bool = True,
-         workers: int = MAX_WORKERS):
-
-    print(f"\n{'#'*60}")
-    print(f"  FULL INDIAN MARKET SCAN")
-    print(f"  Started: {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
-    print(f"{'#'*60}\n")
-
-    # ── Stage 1: symbol lists (cached for 24 h) ──────────────────────────────
+def _load_universe(nse_only: bool) -> tuple:
+    """Stage 1: (nse_symbols, bse_only_symbols), from the 24 h cache or freshly fetched (and then cached)."""
     nse_symbols, bse_only = _load_symbol_cache()
     if nse_symbols is None:
         print("Fetching NSE symbol list (nsepython) …")
@@ -456,6 +333,104 @@ def main(nse_only: bool = False, top: int = 0, run_scans: bool = True,
         print(f"  Symbol cache hit: {len(nse_symbols)} NSE + {len(bse_only)} BSE-only")
         if nse_only:
             bse_only = []
+    return nse_symbols, bse_only
+
+
+def _build_base_row(sym: str, suffix: str, df: pd.DataFrame) -> dict:
+    """Stage-3 row for one ticker: last/previous close, % change and the Darvas Box fields."""
+    result = compute_darvas_box(df)
+    closes = pd.to_numeric(df["Close"], errors="coerce").dropna()
+    ltp, prev, chg_pct = price_change(closes, 2)
+    return {
+        "Symbol":        sym,
+        "Suffix":        suffix,
+        "LTP":           ltp,
+        "Prev_Close":    prev,
+        "Change%":       chg_pct,
+        "Darvas_Signal": result.get("signal"),
+        "Box_Top":       result.get("box_top"),
+        "Box_Bottom":    result.get("box_bottom"),
+        "Upside_to_Top%": result.get("upside_to_top_pct"),
+        "Position_in_Box%": result.get("position_in_box_pct"),
+        "Data_Points":   result.get("data_points"),
+    }
+
+
+def _screen_darvas(ohlc_data: dict, yf_map: dict) -> tuple:
+    """Stage 3: (all_rows, darvas_rows, breakout_symbols) where breakout_symbols holds (symbol, suffix) pairs."""
+    all_rows = [_build_base_row(*yf_map.get(yf_tkr, (yf_tkr, "")), df) for yf_tkr, df in ohlc_data.items()]
+    darvas_rows = [r.copy() for r in all_rows if r["Darvas_Signal"] in ("BREAKOUT_BUY", "BREAKDOWN_SELL")]
+    breakout_symbols = [(r["Symbol"], r["Suffix"]) for r in all_rows if r["Darvas_Signal"] == "BREAKOUT_BUY"]
+    return all_rows, darvas_rows, breakout_symbols
+
+
+def _fund_row(sym: str, suffix: str, darvas_row: dict, res: dict) -> dict:
+    """Stage-4 row: the technical context of a breakout joined with its fundamental scan result."""
+    return {
+        "Symbol":          sym,
+        "Suffix":          suffix,
+        "LTP":             darvas_row.get("LTP"),
+        "Change%":         darvas_row.get("Change%"),
+        "Darvas_Signal":   darvas_row.get("Darvas_Signal"),
+        "Upside_to_Top%":  darvas_row.get("Upside_to_Top%"),
+        "Piotroski_Score": res.get("f_score"),
+        "Piotroski_Strong": "YES" if res.get("f_strong") else "NO",
+        "CoffeeCan":       "PASS" if res.get("qualifies") else "FAIL",
+        "CC_Score":        res.get("cc_score"),
+        "Error":           res.get("error", ""),
+    }
+
+
+def _scan_fundamentals(breakout_symbols: list, darvas_rows: list, workers: int) -> tuple:
+    """Stage 4: (candidates, fund_rows, triple_rows) for the freshest breakouts (capped at MAX_FUND_CANDIDATES)."""
+    # Keep only the N freshest breakouts (closest to the box top, i.e. smallest absolute upside: stocks
+    # that broke out most recently without running away). This cuts API calls on large universes.
+    def _upside(sym_suf):
+        row = next((r for r in darvas_rows if r["Symbol"] == sym_suf[0]), None)
+        return abs(row["Upside_to_Top%"]) if row and row.get("Upside_to_Top%") is not None else 999
+
+    if len(breakout_symbols) > MAX_FUND_CANDIDATES:
+        breakout_symbols = sorted(breakout_symbols, key=_upside)[:MAX_FUND_CANDIDATES]
+        print(f"  (pre-filtered to {MAX_FUND_CANDIDATES} freshest breakouts)")
+
+    print(f"\nStage 4 — Fundamental scans on {len(breakout_symbols)} breakout candidates "
+          f"({workers} workers) …")
+    fund_rows, triple_rows = run_fundamental_pool(
+        breakout_symbols, lambda cand: fundamental_scan(*cand), workers,
+        build_row=lambda cand, res: _fund_row(
+            cand[0], cand[1], next((r for r in darvas_rows if r["Symbol"] == cand[0]), {}), res),
+        is_triple=lambda res: res.get("f_strong") and res.get("qualifies"),
+        name_of=lambda cand: cand[0],
+        progress_fmt="    {done}/{total} done  (triple hits so far: {triples})", every=20)
+    return breakout_symbols, fund_rows, triple_rows
+
+
+def _print_summary(all_rows, breakout_symbols, fund_rows, triple_rows) -> None:
+    """Print the closing banner and the triple-hit list."""
+    print(f"\n{'='*60}")
+    print(f"  SCAN COMPLETE — {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
+    print(f"  Tickers scanned:     {len(all_rows)}")
+    print(f"  Darvas Breakouts:    {len(breakout_symbols)}")
+    print(f"  Fundamental scanned: {len(fund_rows)}")
+    print(f"  ★ TRIPLE HITS:       {len(triple_rows)}")
+    if triple_rows:
+        print(f"\n  Triple-hit stocks:")
+        for r in sorted(triple_rows, key=lambda x: x.get("Piotroski_Score") or 0, reverse=True):
+            print(f"    {r['Symbol']:<20} F={r['Piotroski_Score']}/9  CC={r['CC_Score']}  "
+                  f"LTP={r['LTP']}  +{r['Upside_to_Top%']}% to box top")
+    print(f"{'='*60}\n")
+
+
+def main(nse_only: bool = False, top: int = 0, run_scans: bool = True,
+         workers: int = MAX_WORKERS):
+
+    print(f"\n{'#'*60}")
+    print(f"  FULL INDIAN MARKET SCAN")
+    print(f"  Started: {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
+    print(f"{'#'*60}\n")
+
+    # ── Stage 1: symbol lists (cached for 24 h) ──────────────────────────────
+    nse_symbols, bse_only = _load_universe(nse_only)
 
     # Build yfinance ticker list: NSE symbols → SYMBOL.NS, BSE-only → CODE.BO
     yf_map: dict[str, tuple[str, str]] = {}   # yf_ticker → (nse_symbol, suffix)
@@ -478,113 +453,23 @@ def main(nse_only: bool = False, top: int = 0, run_scans: bool = True,
 
     # ── Stage 3: Darvas Box screen ───────────────────────────────────────────
     print("Stage 3 — Darvas Box screen …")
-    all_rows, darvas_rows, breakout_symbols = [], [], []
-
-    for yf_tkr, df in ohlc_data.items():
-        sym, suffix = yf_map.get(yf_tkr, (yf_tkr, ""))
-        result = compute_darvas_box(df)
-        closes = pd.to_numeric(df["Close"], errors="coerce").dropna()
-        ltp    = round(float(closes.iloc[-1]), 2) if not closes.empty else None
-        prev   = round(float(closes.iloc[-2]), 2) if len(closes) >= 2 else None
-        chg_pct = round((ltp - prev) / prev * 100, 2) if (ltp and prev and prev) else None
-
-        base_row = {
-            "Symbol":        sym,
-            "Suffix":        suffix,
-            "LTP":           ltp,
-            "Prev_Close":    prev,
-            "Change%":       chg_pct,
-            "Darvas_Signal": result.get("signal"),
-            "Box_Top":       result.get("box_top"),
-            "Box_Bottom":    result.get("box_bottom"),
-            "Upside_to_Top%": result.get("upside_to_top_pct"),
-            "Position_in_Box%": result.get("position_in_box_pct"),
-            "Data_Points":   result.get("data_points"),
-        }
-        all_rows.append(base_row)
-
-        if result.get("signal") in ("BREAKOUT_BUY", "BREAKDOWN_SELL"):
-            darvas_rows.append(base_row.copy())
-        if result.get("signal") == "BREAKOUT_BUY":
-            breakout_symbols.append((sym, suffix))
-
-    breakouts = [s for s, _ in breakout_symbols]
+    all_rows, darvas_rows, breakout_symbols = _screen_darvas(ohlc_data, yf_map)
     breakdowns = [r["Symbol"] for r in darvas_rows if r["Darvas_Signal"] == "BREAKDOWN_SELL"]
     print(f"  Breakout BUY:  {len(breakout_symbols)}")
     print(f"  Breakdown SELL:{len(breakdowns)}")
     print(f"  In Box:        {len(all_rows) - len(darvas_rows)}")
 
     # ── Stage 4: Fundamental scans on breakout candidates ────────────────────
-    fund_rows, triple_rows = [], []
-
     if run_scans and breakout_symbols:
-        # Keep only the N freshest breakouts (those closest to the box top, i.e.
-        # smallest absolute upside — stocks that broke out most recently without
-        # having run away). This dramatically cuts API calls on large universes.
-        def _upside(sym_suf):
-            row = next((r for r in darvas_rows if r["Symbol"] == sym_suf[0]), None)
-            return abs(row["Upside_to_Top%"]) if row and row.get("Upside_to_Top%") is not None else 999
-        if len(breakout_symbols) > MAX_FUND_CANDIDATES:
-            breakout_symbols = sorted(breakout_symbols, key=_upside)[:MAX_FUND_CANDIDATES]
-            print(f"  (pre-filtered to {MAX_FUND_CANDIDATES} freshest breakouts)")
-
-        print(f"\nStage 4 — Fundamental scans on {len(breakout_symbols)} breakout candidates "
-              f"({workers} workers) …")
-        done = 0
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {
-                pool.submit(fundamental_scan, sym, suffix): (sym, suffix)
-                for sym, suffix in breakout_symbols
-            }
-            for future in as_completed(futures):
-                sym, suffix = futures[future]
-                done += 1
-                try:
-                    res = future.result()
-                    darvas_row = next((r for r in darvas_rows if r["Symbol"] == sym), {})
-                    fund_row = {
-                        "Symbol":          sym,
-                        "Suffix":          suffix,
-                        "LTP":             darvas_row.get("LTP"),
-                        "Change%":         darvas_row.get("Change%"),
-                        "Darvas_Signal":   darvas_row.get("Darvas_Signal"),
-                        "Upside_to_Top%":  darvas_row.get("Upside_to_Top%"),
-                        "Piotroski_Score": res.get("f_score"),
-                        "Piotroski_Strong": "YES" if res.get("f_strong") else "NO",
-                        "CoffeeCan":       "PASS" if res.get("qualifies") else "FAIL",
-                        "CC_Score":        res.get("cc_score"),
-                        "Error":           res.get("error", ""),
-                    }
-                    fund_rows.append(fund_row)
-
-                    if res.get("f_strong") and res.get("qualifies"):
-                        triple_rows.append(fund_row.copy())
-
-                    if done % 20 == 0 or done == len(breakout_symbols):
-                        print(f"    {done}/{len(breakout_symbols)} done  "
-                              f"(triple hits so far: {len(triple_rows)})")
-                except Exception as e:
-                    print(f"    {sym}: error — {e}")
+        breakout_symbols, fund_rows, triple_rows = _scan_fundamentals(breakout_symbols, darvas_rows, workers)
     else:
+        fund_rows, triple_rows = [], []
         print("\nStage 4 — Skipped (--no-scans)")
 
     # ── Stage 5: Save results ─────────────────────────────────────────────────
     print("\nStage 5 — Saving results …")
     path = save_excel(all_rows, darvas_rows, fund_rows, triple_rows, tag="indian")
-
-    # Summary
-    print(f"\n{'='*60}")
-    print(f"  SCAN COMPLETE — {datetime.now().strftime('%d %b %Y  %H:%M:%S')}")
-    print(f"  Tickers scanned:     {len(all_rows)}")
-    print(f"  Darvas Breakouts:    {len(breakout_symbols)}")
-    print(f"  Fundamental scanned: {len(fund_rows)}")
-    print(f"  ★ TRIPLE HITS:       {len(triple_rows)}")
-    if triple_rows:
-        print(f"\n  Triple-hit stocks:")
-        for r in sorted(triple_rows, key=lambda x: x.get("Piotroski_Score") or 0, reverse=True):
-            print(f"    {r['Symbol']:<20} F={r['Piotroski_Score']}/9  CC={r['CC_Score']}  "
-                  f"LTP={r['LTP']}  +{r['Upside_to_Top%']}% to box top")
-    print(f"{'='*60}\n")
+    _print_summary(all_rows, breakout_symbols, fund_rows, triple_rows)
     return {"triple_hits": triple_rows, "breakouts": len(breakout_symbols),
             "total_scanned": len(all_rows), "excel_path": str(path)}
 

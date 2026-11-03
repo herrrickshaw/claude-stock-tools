@@ -1,0 +1,964 @@
+{
+ "D05": {
+  "cells": {
+   "A1": [
+    "D05 \u2014 DBS",
+    true,
+    14.0,
+    null,
+    null,
+    null
+   ],
+   "A10": [
+    "P/B Ratio",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A11": [
+    "Div Yield %",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A12": [
+    "Market Cap",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A13": [
+    "Volume",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A15": [
+    "TECHNICAL & FUNDAMENTAL SCANS",
+    true,
+    12.0,
+    "00FFFFFF",
+    "004472C4",
+    null
+   ],
+   "A17": [
+    "Darvas Box",
+    true,
+    11.0,
+    null,
+    null,
+    null
+   ],
+   "A18": [
+    "Signal",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A19": [
+    "Box Top",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A20": [
+    "Box Bottom",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A21": [
+    "Position in Box %",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A22": [
+    "Upside to Top %",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A24": [
+    "Piotroski F-Score",
+    true,
+    11.0,
+    null,
+    null,
+    null
+   ],
+   "A25": [
+    "Score (0-9)",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A26": [
+    "Interpretation",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A28": [
+    "PEGY Ratio & Breakout",
+    true,
+    11.0,
+    null,
+    null,
+    null
+   ],
+   "A29": [
+    "PEG Ratio",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A3": [
+    "QUOTE & VALUATION",
+    true,
+    12.0,
+    "00FFFFFF",
+    "0070AD47",
+    null
+   ],
+   "A30": [
+    "PEGY Adjusted",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A31": [
+    "Dividend Yield %",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A32": [
+    "Breakout Signal",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A33": [
+    "Distance from 200MA %",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A4": [
+    "CMP (S$)",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A5": [
+    "Change %",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A6": [
+    "52W High",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A7": [
+    "52W Low",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A8": [
+    "200-Day MA",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A9": [
+    "P/E Ratio",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B10": [
+    1.4,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B11": [
+    5,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B12": [
+    110000000000,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B13": [
+    1200000,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B18": [
+    "BREAKOUT_BUY",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B19": [
+    39.5,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B20": [
+    35,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B21": [
+    110,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B22": [
+    -1.25,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B25": [
+    8,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B26": [
+    "STRONG",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B29": [
+    1.1,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B30": [
+    0.9,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B31": [
+    5,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B32": [
+    "BREAKOUT",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B33": [
+    11.1,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B4": [
+    40,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B5": [
+    2.564102564102564,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B6": [
+    42,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B7": [
+    30,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B8": [
+    36,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B9": [
+    9.5,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ]
+  },
+  "merged": [
+   "A15:D15",
+   "A1:D1",
+   "A3:D3"
+  ],
+  "widths": {
+   "A": 25.0,
+   "B": 20.0
+  }
+ },
+ "Summary": {
+  "cells": {
+   "A1": [
+    "Symbol",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "A2": [
+    "D05",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A3": [
+    "Z74",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B1": [
+    "Company",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "B2": [
+    "DBS",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "B3": [
+    "Sparse",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "C1": [
+    "Sector",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "C2": [
+    "Banks",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "D1": [
+    "CMP (S$)",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "D2": [
+    40,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "E1": [
+    "Change %",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "E2": [
+    2.564102564102564,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "F1": [
+    "P/E",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "F2": [
+    9.5,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "G1": [
+    "P/B",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "G2": [
+    1.4,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "H1": [
+    "Div Yield %",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "H2": [
+    5,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "I1": [
+    "52W High",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "I2": [
+    42,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "J1": [
+    "52W Low",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "J2": [
+    30,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "K1": [
+    "Volume",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "K2": [
+    1200000,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "L1": [
+    "Darvas Signal",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "L2": [
+    "BREAKOUT_BUY",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "M1": [
+    "Darvas Top",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "M2": [
+    39.5,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "N1": [
+    "Darvas Bottom",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "N2": [
+    35,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "O1": [
+    "Piotroski Score",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "O2": [
+    8,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "P1": [
+    "PEGY Ratio",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "P2": [
+    0.9,
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "Q1": [
+    "Breakout Signal",
+    true,
+    11.0,
+    "00FFFFFF",
+    "004472C4",
+    "center"
+   ],
+   "Q2": [
+    "BREAKOUT",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ]
+  },
+  "merged": [],
+  "widths": {
+   "A": 8.0,
+   "B": 9.0,
+   "C": 8.0,
+   "D": 10.0,
+   "E": 19.0,
+   "F": 6.0,
+   "G": 6.0,
+   "H": 13.0,
+   "I": 10.0,
+   "J": 9.0,
+   "K": 9.0,
+   "L": 15.0,
+   "M": 12.0,
+   "N": 15.0,
+   "O": 17.0,
+   "P": 12.0,
+   "Q": 17.0
+  }
+ },
+ "Z74": {
+  "cells": {
+   "A1": [
+    "Z74 \u2014 Sparse",
+    true,
+    14.0,
+    null,
+    null,
+    null
+   ],
+   "A10": [
+    "P/B Ratio",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A11": [
+    "Div Yield %",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A12": [
+    "Market Cap",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A13": [
+    "Volume",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A15": [
+    "TECHNICAL & FUNDAMENTAL SCANS",
+    true,
+    12.0,
+    "00FFFFFF",
+    "004472C4",
+    null
+   ],
+   "A17": [
+    "Darvas Box",
+    true,
+    11.0,
+    null,
+    null,
+    null
+   ],
+   "A18": [
+    "Signal",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A19": [
+    "Box Top",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A20": [
+    "Box Bottom",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A21": [
+    "Position in Box %",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A22": [
+    "Upside to Top %",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A24": [
+    "Piotroski F-Score",
+    true,
+    11.0,
+    null,
+    null,
+    null
+   ],
+   "A25": [
+    "Score (0-9)",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A26": [
+    "Interpretation",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A28": [
+    "PEGY Ratio & Breakout",
+    true,
+    11.0,
+    null,
+    null,
+    null
+   ],
+   "A29": [
+    "PEG Ratio",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A3": [
+    "QUOTE & VALUATION",
+    true,
+    12.0,
+    "00FFFFFF",
+    "0070AD47",
+    null
+   ],
+   "A30": [
+    "PEGY Adjusted",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A31": [
+    "Dividend Yield %",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A32": [
+    "Breakout Signal",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A33": [
+    "Distance from 200MA %",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A4": [
+    "CMP (S$)",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A5": [
+    "Change %",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A6": [
+    "52W High",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A7": [
+    "52W Low",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A8": [
+    "200-Day MA",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ],
+   "A9": [
+    "P/E Ratio",
+    false,
+    11.0,
+    "Values must be of type <class 'str'>",
+    null,
+    null
+   ]
+  },
+  "merged": [
+   "A15:D15",
+   "A1:D1",
+   "A3:D3"
+  ],
+  "widths": {
+   "A": 25.0,
+   "B": 20.0
+  }
+ }
+}

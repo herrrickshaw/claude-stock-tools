@@ -1,0 +1,8 @@
+{
+ "coffee_can": {
+  "error": "No data for TCS.NS on Yahoo Finance"
+ },
+ "piotroski": {
+  "error": "No financial data found for TCS.NS on Yahoo Finance"
+ }
+}

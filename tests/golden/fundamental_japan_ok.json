@@ -1,0 +1,12 @@
+{
+ "cc_debt_equity": 0.07,
+ "cc_qualifies": "PASS",
+ "cc_rev_cagr": 16.96,
+ "cc_roce_avg": 17.87,
+ "cc_score": "6/6",
+ "error": null,
+ "f_score": 9,
+ "f_strong": true,
+ "market_cap_b_jpy": 5000.0,
+ "yf_ticker": "7203.T"
+}

@@ -1,0 +1,54 @@
+{
+ "coffee_can": {
+  "criteria": {
+   "C1_RevenuCAGR_gt10": 1,
+   "C2_ROCE_gt15": 1,
+   "C3_LowDebt": 1,
+   "C4_MCap_ge500Cr": 1,
+   "C5_NoProfitLoss": 1
+  },
+  "details": {
+   "Debt_to_Equity": 0.45,
+   "Loss_years": 0,
+   "Market_Cap_Cr": 600000.0,
+   "ROCE_avg_%": 17.82,
+   "ROCE_min_%": 15.97,
+   "ROCE_years": 4,
+   "Revenue_CAGR_%": 16.96,
+   "Revenue_years": 3,
+   "Years_analysed": 4
+  },
+  "qualifies": true,
+  "score": "5/5",
+  "symbol": "TCS"
+ },
+ "piotroski": {
+  "component_scores": {
+   "F1_ROA_positive": 1,
+   "F2_OCF_positive": 1,
+   "F3_ROA_improving": 1,
+   "F4_Accruals": 1,
+   "F5_Leverage_down": 1,
+   "F6_CurrentRatio_up": 1,
+   "F7_No_dilution": 1,
+   "F8_GrossMargin_up": 1,
+   "F9_AssetTurnover_up": 1
+  },
+  "details": {
+   "AssetTurnover_curr": 0.8,
+   "AssetTurnover_prev": 0.739,
+   "CurrentRatio_curr": 2.4,
+   "CurrentRatio_prev": 2.08,
+   "GrossMargin_curr_%": 45.0,
+   "GrossMargin_prev_%": 41.18,
+   "LTD_ratio_curr_%": 4.0,
+   "LTD_ratio_prev_%": 8.7,
+   "OCF_current_Cr": 0.0,
+   "ROA_current_%": 6.0,
+   "ROA_prev_%": 5.22
+  },
+  "f_score": 9,
+  "interpretation": "STRONG \u2014 likely outperformer",
+  "symbol": "TCS"
+ }
+}

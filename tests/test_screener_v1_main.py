@@ -64,3 +64,36 @@ def test_main_golden(tmp_path, monkeypatch, capsys, label, kwargs):
     if not path.exists():  # recorded once from the ORIGINAL implementation
         path.write_text(json.dumps(got, indent=1, sort_keys=True))
     assert got == json.loads(path.read_text())
+
+
+def _run_colab(tmp_path, monkeypatch, capsys, **kwargs):
+    mod = _load("03_colab_notebooks/us_stocks_colab_script.py", tmp_path, monkeypatch)
+    out = tmp_path / "out"
+    monkeypatch.setattr(mod, "OUTPUT_DIR", out)
+    monkeypatch.setattr(mod, "DB_FILE", out / "screener.db")
+    monkeypatch.setattr(mod, "TQDM_OK", False)
+    monkeypatch.setattr(mod, "fetch_stock_universe", lambda exchange="all": UNIVERSE.copy())
+    monkeypatch.setattr(mod, "run_darvas_batch", lambda syms, batch_size=500, pbar=None: {s: DARVAS[s] for s in syms})
+    monkeypatch.setattr(mod, "_scan_fundamentals_one", _fund)
+    mod.screen_market(delay=0, workers=1, **kwargs)
+    text = capsys.readouterr().out.replace(str(tmp_path), "<TMP>")
+    con = sqlite3.connect(out / "screener.db")
+    results = pd.read_sql("SELECT * FROM results ORDER BY symbol", con).drop(columns=["scanned_at"])
+    progress = pd.read_sql("SELECT symbol, phase FROM progress ORDER BY phase, symbol", con)
+    con.close()
+    files = {p.name: json.loads(pd.read_csv(p).drop(columns=["scanned_at"], errors="ignore")
+                                .sort_values("symbol").to_json(orient="records"))
+             for p in sorted(out.glob("*.csv")) if p.name != "stock_universe.csv" and p.stat().st_size > 5}
+    got = {"stdout": STAMP.sub("<DATE>", text), "results": json.loads(results.to_json(orient="records")),
+           "progress": progress.to_dict("records"), "files": {STAMP.sub("<DATE>", k): v for k, v in files.items()}}
+    return json.loads(json.dumps(got, default=str))
+
+
+@pytest.mark.parametrize("label,kwargs", [("full", {}), ("darvas_only", {"darvas_only": True}),
+                                          ("limit", {"limit": 2})])
+def test_colab_screen_market_golden(tmp_path, monkeypatch, capsys, label, kwargs):
+    got = _run_colab(tmp_path, monkeypatch, capsys, **kwargs)
+    path = GOLDEN / f"colab_screen_market_{label}.json"
+    if not path.exists():  # recorded once from the ORIGINAL implementation
+        path.write_text(json.dumps(got, indent=1, sort_keys=True))
+    assert got == json.loads(path.read_text())

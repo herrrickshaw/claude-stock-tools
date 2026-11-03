@@ -1329,26 +1329,8 @@ def _compile_screener_outputs(con, today: str):
                   f"{r['cc_score']:>4}")
 
 
-def screen_market(
-    exchange:    str   = "all",
-    limit:       int   = 0,
-    resume:      bool  = False,
-    darvas_only: bool  = False,
-    batch_size:  int   = 500,
-    workers:     int   = 10,
-    delay:       float = 0.05,
-):
-    """
-    Full NASDAQ + NYSE/AMEX equity screener.
-
-    Phase 1 (Darvas, fast):   bulk OHLC download in batches of `batch_size`.
-    Phase 2 (Fundamentals):   per-stock Piotroski + Coffee Can via threadpool.
-    Outputs CSVs to OUTPUT_DIR; checkpoints to SQLite for --resume support.
-    """
-    today = datetime.today().strftime("%Y%m%d")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    con = _init_db(DB_FILE)
-
+def _load_universe(exchange: str, limit: int, resume: bool) -> pd.DataFrame:
+    """Step 1: the stock universe, from the cached CSV when resuming, else freshly fetched (and cached)."""
     print("\n── Step 1: Stock Universe ────────────────────────────────────────────")
     universe_file = OUTPUT_DIR / "stock_universe.csv"
     if universe_file.exists() and resume:
@@ -1362,11 +1344,15 @@ def screen_market(
     if limit:
         universe = universe.head(limit)
         print(f"  Limited to {len(universe):,} stocks (limit={limit})")
+    return universe
 
-    symbols  = universe["Symbol"].tolist()
-    name_map = dict(zip(universe["Symbol"], universe["Name"]))
-    exch_map = dict(zip(universe["Symbol"], universe["Exchange"]))
 
+def _run_darvas_phase(con, symbols: list, name_map: dict, exch_map: dict, resume: bool, batch_size: int):
+    """Phase 1: batch OHLC download, then one bulk SQLite transaction of results; returns the connection.
+
+    The connection is reopened after the download: the original handle sits idle for ~8 minutes and
+    macOS sometimes invalidates it (disk I/O error on the first INSERT).
+    """
     print("\n── Phase 1: Darvas Box (batch OHLC download) ─────────────────────────")
     done_darvas = _already_done(con, "darvas") if resume else set()
     todo_darvas = [s for s in symbols if s not in done_darvas]
@@ -1379,13 +1365,9 @@ def screen_market(
     if pbar_d:
         pbar_d.close()
 
-    # Reopen the connection — the original handle has sat idle for ~8 min
-    # during the yfinance batch download and macOS sometimes invalidates it
-    # (disk I/O error on the first INSERT).
     con.close()
     con = _open_db(DB_FILE)
 
-    # Bulk-insert Phase 1 results in a single transaction.
     now = datetime.now().isoformat()
     con.execute("BEGIN")
     try:
@@ -1408,18 +1390,19 @@ def screen_market(
         con.rollback()
         raise
 
+    def _count(signal):
+        return sum(1 for v in darvas_results.values() if v.get("signal") == signal)
+
     print(f"  Phase 1 done.  "
-          f"Breakouts: {sum(1 for v in darvas_results.values() if v.get('signal')=='BREAKOUT_BUY'):,}  "
-          f"In-box: {sum(1 for v in darvas_results.values() if v.get('signal')=='IN_BOX'):,}  "
-          f"Breakdown: {sum(1 for v in darvas_results.values() if v.get('signal')=='BREAKDOWN_SELL'):,}")
+          f"Breakouts: {_count('BREAKOUT_BUY'):,}  "
+          f"In-box: {_count('IN_BOX'):,}  "
+          f"Breakdown: {_count('BREAKDOWN_SELL'):,}")
+    return con
 
-    if darvas_only:
-        print("\n  darvas_only=True. Skipping fundamentals.")
-        print("\n── Results ───────────────────────────────────────────────────────────")
-        _compile_screener_outputs(con, today)
-        con.close()
-        return
 
+def _run_fundamentals_phase(con, symbols: list, name_map: dict, exch_map: dict, resume: bool,
+                            workers: int, delay: float) -> None:
+    """Phase 2: Piotroski + Coffee Can per stock in a thread pool, checkpointing each result."""
     print(f"\n── Phase 2: Piotroski + Coffee Can ({workers} workers) ──────────────────")
     print(f"  Estimated time: {len(symbols) * 4 / workers / 60:.0f}–"
           f"{len(symbols) * 6 / workers / 60:.0f} minutes (depends on Yahoo latency)")
@@ -1448,6 +1431,43 @@ def screen_market(
 
     if pbar_f:
         pbar_f.close()
+
+
+def screen_market(
+    exchange:    str   = "all",
+    limit:       int   = 0,
+    resume:      bool  = False,
+    darvas_only: bool  = False,
+    batch_size:  int   = 500,
+    workers:     int   = 10,
+    delay:       float = 0.05,
+):
+    """
+    Full NASDAQ + NYSE/AMEX equity screener.
+
+    Phase 1 (Darvas, fast):   bulk OHLC download in batches of `batch_size`.
+    Phase 2 (Fundamentals):   per-stock Piotroski + Coffee Can via threadpool.
+    Outputs CSVs to OUTPUT_DIR; checkpoints to SQLite for --resume support.
+    """
+    today = datetime.today().strftime("%Y%m%d")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    con = _init_db(DB_FILE)
+
+    universe = _load_universe(exchange, limit, resume)
+    symbols  = universe["Symbol"].tolist()
+    name_map = dict(zip(universe["Symbol"], universe["Name"]))
+    exch_map = dict(zip(universe["Symbol"], universe["Exchange"]))
+
+    con = _run_darvas_phase(con, symbols, name_map, exch_map, resume, batch_size)
+
+    if darvas_only:
+        print("\n  darvas_only=True. Skipping fundamentals.")
+        print("\n── Results ───────────────────────────────────────────────────────────")
+        _compile_screener_outputs(con, today)
+        con.close()
+        return
+
+    _run_fundamentals_phase(con, symbols, name_map, exch_map, resume, workers, delay)
 
     print("\n── Results ───────────────────────────────────────────────────────────")
     _compile_screener_outputs(con, today)

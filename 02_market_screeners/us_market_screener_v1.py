@@ -676,36 +676,8 @@ def compile_outputs(con: sqlite3.Connection, today: str):
 # MAIN ORCHESTRATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def main(
-    exchange:     str  = "all",
-    limit:        int  = 0,
-    resume:       bool = False,
-    darvas_only:  bool = False,
-    batch_size:   int  = 500,
-    workers:      int  = 10,
-    delay:        float = 0.05,   # seconds between fundamentals calls per worker
-):
-    """
-    Full pipeline:
-      1. Fetch stock universe from NASDAQ Trader
-      2. Phase 1 — Darvas batch OHLC download
-      3. Phase 2 — Fundamentals per-stock (Piotroski + Coffee Can)
-      4. Compile output CSVs
-
-    Args:
-        exchange:    'all' | 'nasdaq' | 'nyse' | 'amex'
-        limit:       process only the first N stocks (0 = all)
-        resume:      skip symbols already in the SQLite checkpoint
-        darvas_only: skip Phase 2 (fundamentals) — much faster
-        batch_size:  tickers per yf.download() call
-        workers:     ThreadPoolExecutor workers for fundamentals
-        delay:       sleep between fundamentals calls to respect rate limits
-    """
-    today = datetime.today().strftime("%Y%m%d")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    con = init_db(DB_FILE)
-
-    # ── Step 1: Stock universe ─────────────────────────────────────────────────
+def _load_universe(exchange: str, limit: int, resume: bool) -> pd.DataFrame:
+    """Step 1: the stock universe, from the cached CSV when resuming, else freshly fetched (and cached)."""
     print("\n── Step 1: Stock Universe ────────────────────────────────────────────")
     universe_file = OUTPUT_DIR / "stock_universe.csv"
 
@@ -720,12 +692,12 @@ def main(
     if limit:
         universe = universe.head(limit)
         print(f"  Limited to {len(universe):,} stocks (--limit {limit})")
+    return universe
 
-    symbols  = universe["Symbol"].tolist()
-    name_map = dict(zip(universe["Symbol"], universe["Name"]))
-    exch_map = dict(zip(universe["Symbol"], universe["Exchange"]))
 
-    # ── Step 2: Darvas Box (batch OHLC) ───────────────────────────────────────
+def _run_darvas_phase(con, symbols: list, name_map: dict, exch_map: dict, resume: bool,
+                      batch_size: int) -> None:
+    """Phase 1: batch-download OHLC, classify Darvas boxes and checkpoint each symbol in SQLite."""
     print("\n── Phase 1: Darvas Box (batch OHLC download) ─────────────────────────")
 
     done_darvas = already_done(con, "darvas") if resume else set()
@@ -742,7 +714,6 @@ def main(
     if pbar_d:
         pbar_d.close()
 
-    # Write Darvas results to SQLite
     for sym, dr in darvas_results.items():
         upsert_result(con, {
             "symbol":       sym,
@@ -758,19 +729,18 @@ def main(
         })
         mark_done(con, sym, "darvas")
 
+    def _count(signal):
+        return sum(1 for v in darvas_results.values() if v.get("signal") == signal)
+
     print(f"  Phase 1 done.  "
-          f"Breakouts: {sum(1 for v in darvas_results.values() if v.get('signal')=='BREAKOUT_BUY'):,}  "
-          f"In-box: {sum(1 for v in darvas_results.values() if v.get('signal')=='IN_BOX'):,}  "
-          f"Breakdown: {sum(1 for v in darvas_results.values() if v.get('signal')=='BREAKDOWN_SELL'):,}")
+          f"Breakouts: {_count('BREAKOUT_BUY'):,}  "
+          f"In-box: {_count('IN_BOX'):,}  "
+          f"Breakdown: {_count('BREAKDOWN_SELL'):,}")
 
-    if darvas_only:
-        print("\n  --darvas-only set. Skipping fundamentals.")
-        print("\n── Results ───────────────────────────────────────────────────────────")
-        compile_outputs(con, today)
-        con.close()
-        return
 
-    # ── Step 3: Piotroski + Coffee Can (threaded) ─────────────────────────────
+def _run_fundamentals_phase(con, symbols: list, name_map: dict, exch_map: dict, resume: bool,
+                            workers: int, delay: float) -> None:
+    """Phase 2: Piotroski + Coffee Can per stock in a thread pool, checkpointing each result."""
     print(f"\n── Phase 2: Piotroski + Coffee Can ({workers} workers) ──────────────────")
     print(f"  Estimated time: {len(symbols) * 4 / workers / 60:.0f}–"
           f"{len(symbols) * 6 / workers / 60:.0f} minutes "
@@ -801,6 +771,52 @@ def main(
 
     if pbar_f:
         pbar_f.close()
+
+
+def main(
+    exchange:     str  = "all",
+    limit:        int  = 0,
+    resume:       bool = False,
+    darvas_only:  bool = False,
+    batch_size:   int  = 500,
+    workers:      int  = 10,
+    delay:        float = 0.05,   # seconds between fundamentals calls per worker
+):
+    """
+    Full pipeline:
+      1. Fetch stock universe from NASDAQ Trader
+      2. Phase 1 — Darvas batch OHLC download
+      3. Phase 2 — Fundamentals per-stock (Piotroski + Coffee Can)
+      4. Compile output CSVs
+
+    Args:
+        exchange:    'all' | 'nasdaq' | 'nyse' | 'amex'
+        limit:       process only the first N stocks (0 = all)
+        resume:      skip symbols already in the SQLite checkpoint
+        darvas_only: skip Phase 2 (fundamentals) — much faster
+        batch_size:  tickers per yf.download() call
+        workers:     ThreadPoolExecutor workers for fundamentals
+        delay:       sleep between fundamentals calls to respect rate limits
+    """
+    today = datetime.today().strftime("%Y%m%d")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    con = init_db(DB_FILE)
+
+    universe = _load_universe(exchange, limit, resume)
+    symbols  = universe["Symbol"].tolist()
+    name_map = dict(zip(universe["Symbol"], universe["Name"]))
+    exch_map = dict(zip(universe["Symbol"], universe["Exchange"]))
+
+    _run_darvas_phase(con, symbols, name_map, exch_map, resume, batch_size)
+
+    if darvas_only:
+        print("\n  --darvas-only set. Skipping fundamentals.")
+        print("\n── Results ───────────────────────────────────────────────────────────")
+        compile_outputs(con, today)
+        con.close()
+        return
+
+    _run_fundamentals_phase(con, symbols, name_map, exch_map, resume, workers, delay)
 
     # ── Step 4: Compile outputs ────────────────────────────────────────────────
     print("\n── Results ───────────────────────────────────────────────────────────")

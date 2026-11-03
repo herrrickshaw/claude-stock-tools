@@ -373,3 +373,117 @@ def write_scan_workbook(path: Path, sheets: Sequence[tuple], style: Optional[Cal
             df.to_excel(writer, sheet_name=name, index=False)
             if style is not None:
                 style(writer.sheets[name])
+
+
+# ── Piotroski F-Score breakdown and Coffee Can criteria (daily reports) ───────────────────────
+
+def _ratio(num: Optional[float], den: Optional[float]) -> Optional[float]:
+    """``num / den`` when both are truthy numbers, else None."""
+    return (num / den) if (num and den) else None
+
+
+def _improved(now: Optional[float], before: Optional[float], lower_is_better: bool = False) -> int:
+    """1 when both values exist and ``now`` beats ``before``, else 0."""
+    if now is None or before is None:
+        return 0
+    return 1 if (now < before if lower_is_better else now > before) else 0
+
+
+def _pct(value: Optional[float]) -> Any:
+    """``value`` as a 2-dp percentage, or 'N/A' when missing or zero."""
+    return round(value * 100, 2) if value else "N/A"
+
+
+def piotroski_components(inc: pd.DataFrame, bal: Optional[pd.DataFrame], cf: Optional[pd.DataFrame],
+                         ocf_detail: tuple, shares_fallback: Optional[float] = None,
+                         shares_detail_key: Optional[str] = None) -> tuple:
+    """The nine Piotroski criteria as ``(scores, details)`` dicts (ordered F1..F9).
+
+    ``ocf_detail`` is ``(details key, divisor, decimals)`` for the operating-cash-flow figure (e.g.
+    ``("OCF_current_$M", 1e6, 1)``). ``shares_fallback`` stands in for a missing latest share count;
+    ``shares_detail_key`` adds the latest share count (millions) to the details when given.
+    """
+    scores, details = {}, {}
+    ni = [row(inc, "Net Income", col=c) for c in (0, 1)]
+    assets = [row(bal, "Total Assets", col=c) for c in (0, 1)]
+    roa = [_ratio(ni[c], assets[c]) for c in (0, 1)]
+    rev = [row(inc, "Total Revenue", col=c) for c in (0, 1)]
+
+    # Profitability: F1-F4
+    ocf_0 = row(cf, "Operating Cash Flow", "Total Cash From Operating Activities", col=0)
+    scores["F1_ROA_positive"] = 1 if (roa[0] and roa[0] > 0) else 0
+    details["ROA_current_%"] = _pct(roa[0])
+    scores["F2_OCF_positive"] = 1 if (ocf_0 and ocf_0 > 0) else 0
+    key, div, nd = ocf_detail
+    details[key] = round(ocf_0 / div, nd) if ocf_0 else "N/A"
+    scores["F3_ROA_improving"] = _improved(roa[0], roa[1])
+    details["ROA_prev_%"] = _pct(roa[1])
+    scores["F4_Accruals"] = 1 if (ocf_0 and assets[0] and roa[0] is not None and (ocf_0 / assets[0]) > roa[0]) else 0
+
+    # Leverage and liquidity: F5-F7
+    ltd = [row(bal, "Long Term Debt", col=c) or 0 for c in (0, 1)]
+    lev = [(ltd[c] / assets[c]) if assets[c] else None for c in (0, 1)]
+    scores["F5_Leverage_down"] = _improved(lev[0], lev[1], lower_is_better=True)
+    details["LTD_ratio_curr_%"] = _pct(lev[0])
+    details["LTD_ratio_prev_%"] = _pct(lev[1])
+    cr = [_ratio(row(bal, "Current Assets", "Total Current Assets", col=c),
+                 row(bal, "Current Liabilities", "Total Current Liabilities", col=c)) for c in (0, 1)]
+    scores["F6_CurrentRatio_up"] = _improved(cr[0], cr[1])
+    details["CurrentRatio_curr"] = round(cr[0], 2) if cr[0] else "N/A"
+    details["CurrentRatio_prev"] = round(cr[1], 2) if cr[1] else "N/A"
+    sh_0 = row(bal, "Share Issued", col=0) or shares_fallback
+    sh_1 = row(bal, "Share Issued", col=1)
+    scores["F7_No_dilution"] = (1 if sh_0 <= sh_1 else 0) if (sh_0 and sh_1) else 1  # no data: assume none
+    if shares_detail_key:
+        details[shares_detail_key] = round(sh_0 / 1e6, 1) if sh_0 else "N/A"
+
+    # Operating efficiency: F8-F9
+    gm = [_ratio(row(inc, "Gross Profit", col=c), rev[c]) for c in (0, 1)]
+    scores["F8_GrossMargin_up"] = _improved(gm[0], gm[1])
+    details["GrossMargin_curr_%"] = _pct(gm[0])
+    details["GrossMargin_prev_%"] = _pct(gm[1])
+    at = [_ratio(rev[c], assets[c]) for c in (0, 1)]
+    scores["F9_AssetTurnover_up"] = _improved(at[0], at[1])
+    details["AssetTurnover_curr"] = round(at[0], 3) if at[0] else "N/A"
+    details["AssetTurnover_prev"] = round(at[1], 3) if at[1] else "N/A"
+    return scores, details
+
+
+def interpret_f_score(total: int) -> str:
+    """Plain-language reading of a 0-9 Piotroski score."""
+    return ("STRONG — likely outperformer" if total >= 7 else
+            "MODERATE — neutral stance" if total >= 4 else
+            "WEAK — avoid or short candidate")
+
+
+def revenue_cagr_criterion(inc: pd.DataFrame, key: str) -> tuple:
+    """Coffee Can C1: ``({key: 0/1}, details)`` for revenue CAGR > 10% over the available years."""
+    revs = series(inc, "Total Revenue")
+    if len(revs) < 2:
+        return {key: 0}, {"Revenue_CAGR_%": "N/A"}
+    years = len(revs) - 1  # revs[0] is the latest year, revs[-1] the oldest
+    cagr = ((revs[0] / revs[-1]) ** (1 / years) - 1) * 100 if revs[-1] > 0 else None
+    return ({key: 1 if (cagr and cagr > 10) else 0},
+            {"Revenue_CAGR_%": round(cagr, 2) if cagr else "N/A", "Revenue_years": years})
+
+
+def debt_to_equity_criterion(info: dict, bal: Optional[pd.DataFrame], eq_series: list,
+                             abs_equity: bool) -> tuple:
+    """Coffee Can C3: ``({'C3_LowDebt': 0/1}, details)`` for Debt/Equity < 1 (info first, balance sheet second)."""
+    de_raw = info.get("debtToEquity")
+    if de_raw is not None:
+        de = de_raw / 100 if de_raw > 10 else de_raw  # yfinance sometimes reports percent (45.2 = 0.452x)
+    else:
+        ltd_s = series(bal, "Long Term Debt")
+        if not (ltd_s and eq_series and eq_series[0] != 0):
+            return {"C3_LowDebt": 0}, {"Debt_to_Equity": "N/A"}
+        de = ltd_s[0] / (abs(eq_series[0]) if abs_equity else eq_series[0])
+    return {"C3_LowDebt": 1 if de < 1 else 0}, {"Debt_to_Equity": round(de, 2)}
+
+
+def no_loss_year_criterion(ni_series: list) -> tuple:
+    """Coffee Can C5: ``({'C5_NoProfitLoss': 0/1}, details)`` - every analysed year had positive net income."""
+    if not ni_series:
+        return {"C5_NoProfitLoss": 0}, {}
+    return ({"C5_NoProfitLoss": 1 if all(n > 0 for n in ni_series) else 0},
+            {"Loss_years": sum(1 for n in ni_series if n <= 0), "Years_analysed": len(ni_series)})

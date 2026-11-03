@@ -34,7 +34,10 @@ from pathlib import Path
 # ── Third-party ──────────────────────────────────────────────────────────────
 import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "02_market_screeners"))  # shared scan helpers
-from scan_common import find_column, ohlc_lists, report_darvas_box  # noqa: E402
+from scan_common import (  # noqa: E402
+    debt_to_equity_criterion, find_column, interpret_f_score, no_loss_year_criterion, ohlc_lists,
+    piotroski_components, report_darvas_box, revenue_cagr_criterion, series,
+)
 
 # Primary NSE/BSE market-data libraries
 try:
@@ -490,115 +493,14 @@ def compute_piotroski_score(symbol: str) -> dict:
     if inc is None or inc.empty:
         return {"error": f"No financial data found for {yf_sym} on Yahoo Finance"}
 
-    scores  = {}
-    details = {}
-
-    # ── Profitability ─────────────────────────────────────────────────────────
-
-    net_inc_0  = _row(inc, "Net Income", col=0)
-    assets_0   = _row(bal, "Total Assets", col=0)
-    roa_0      = (net_inc_0 / assets_0) if (net_inc_0 and assets_0) else None
-
-    net_inc_1  = _row(inc, "Net Income", col=1)
-    assets_1   = _row(bal, "Total Assets", col=1)
-    roa_1      = (net_inc_1 / assets_1) if (net_inc_1 and assets_1) else None
-
-    # F1 — ROA positive
-    scores["F1_ROA_positive"]    = 1 if (roa_0 and roa_0 > 0)  else 0
-    details["ROA_current_%"]     = round(roa_0 * 100, 2) if roa_0 else "N/A"
-
-    # F2 — Operating Cash Flow positive
-    ocf_0 = _row(cf, "Operating Cash Flow", "Total Cash From Operating Activities", col=0)
-    scores["F2_OCF_positive"]    = 1 if (ocf_0 and ocf_0 > 0) else 0
-    details["OCF_current_Cr"]    = round(ocf_0 / 1e7, 2) if ocf_0 else "N/A"
-
-    # F3 — ROA improving
-    if roa_0 is not None and roa_1 is not None:
-        scores["F3_ROA_improving"] = 1 if roa_0 > roa_1 else 0
-    else:
-        scores["F3_ROA_improving"] = 0
-    details["ROA_prev_%"]        = round(roa_1 * 100, 2) if roa_1 else "N/A"
-
-    # F4 — Accruals (cash-backed earnings): OCF/Assets > ROA
-    if ocf_0 and assets_0 and roa_0 is not None:
-        scores["F4_Accruals"]    = 1 if (ocf_0 / assets_0) > roa_0 else 0
-    else:
-        scores["F4_Accruals"]    = 0
-
-    # ── Leverage & Liquidity ──────────────────────────────────────────────────
-
-    # F5 — Long-term debt ratio decreasing
-    ltd_0 = _row(bal, "Long Term Debt", col=0) or 0
-    ltd_1 = _row(bal, "Long Term Debt", col=1) or 0
-    lev_0 = (ltd_0 / assets_0) if assets_0 else None
-    lev_1 = (ltd_1 / assets_1) if assets_1 else None
-    if lev_0 is not None and lev_1 is not None:
-        scores["F5_Leverage_down"]   = 1 if lev_0 < lev_1 else 0
-    else:
-        scores["F5_Leverage_down"]   = 0
-    details["LTD_ratio_curr_%"] = round(lev_0 * 100, 2) if lev_0 else "N/A"
-    details["LTD_ratio_prev_%"] = round(lev_1 * 100, 2) if lev_1 else "N/A"
-
-    # F6 — Current Ratio improving (compute from Current Assets / Current Liabilities)
-    ca_0  = _row(bal, "Current Assets",       "Total Current Assets",       col=0)
-    cl_0  = _row(bal, "Current Liabilities",  "Total Current Liabilities",  col=0)
-    ca_1  = _row(bal, "Current Assets",       "Total Current Assets",       col=1)
-    cl_1  = _row(bal, "Current Liabilities",  "Total Current Liabilities",  col=1)
-    cr_0  = (ca_0 / cl_0) if (ca_0 and cl_0) else None
-    cr_1  = (ca_1 / cl_1) if (ca_1 and cl_1) else None
-    if cr_0 is not None and cr_1 is not None:
-        scores["F6_CurrentRatio_up"] = 1 if cr_0 > cr_1 else 0
-    else:
-        scores["F6_CurrentRatio_up"] = 0
-    details["CurrentRatio_curr"] = round(cr_0, 2) if cr_0 else "N/A"
-    details["CurrentRatio_prev"] = round(cr_1, 2) if cr_1 else "N/A"
-
-    # F7 — No new equity shares issued (non-dilution)
-    sh_0 = _row(bal, "Share Issued", col=0) or info.get("sharesOutstanding")
-    sh_1 = _row(bal, "Share Issued", col=1)
-    if sh_0 and sh_1:
-        scores["F7_No_dilution"]     = 1 if sh_0 <= sh_1 else 0
-    else:
-        scores["F7_No_dilution"]     = 1  # assume no dilution when data absent
-
-    # ── Operating Efficiency ──────────────────────────────────────────────────
-
-    rev_0 = _row(inc, "Total Revenue", col=0)
-    gp_0  = _row(inc, "Gross Profit",  col=0)
-    rev_1 = _row(inc, "Total Revenue", col=1)
-    gp_1  = _row(inc, "Gross Profit",  col=1)
-    gm_0  = (gp_0 / rev_0) if (gp_0 and rev_0) else None
-    gm_1  = (gp_1 / rev_1) if (gp_1 and rev_1) else None
-
-    # F8 — Gross margin improving
-    if gm_0 is not None and gm_1 is not None:
-        scores["F8_GrossMargin_up"]  = 1 if gm_0 > gm_1 else 0
-    else:
-        scores["F8_GrossMargin_up"]  = 0
-    details["GrossMargin_curr_%"] = round(gm_0 * 100, 2) if gm_0 else "N/A"
-    details["GrossMargin_prev_%"] = round(gm_1 * 100, 2) if gm_1 else "N/A"
-
-    # F9 — Asset turnover improving (revenue generated per rupee of assets)
-    at_0 = (rev_0 / assets_0) if (rev_0 and assets_0) else None
-    at_1 = (rev_1 / assets_1) if (rev_1 and assets_1) else None
-    if at_0 is not None and at_1 is not None:
-        scores["F9_AssetTurnover_up"] = 1 if at_0 > at_1 else 0
-    else:
-        scores["F9_AssetTurnover_up"] = 0
-    details["AssetTurnover_curr"] = round(at_0, 3) if at_0 else "N/A"
-    details["AssetTurnover_prev"] = round(at_1, 3) if at_1 else "N/A"
-
+    scores, details = piotroski_components(
+        inc, bal, cf, ocf_detail=("OCF_current_Cr", 1e7, 2),
+        shares_fallback=info.get("sharesOutstanding"))
     total = sum(scores.values())
-    interp = (
-        "STRONG — likely outperformer" if total >= 7 else
-        "MODERATE — neutral stance"    if total >= 4 else
-        "WEAK — avoid or short candidate"
-    )
-
     return {
         "symbol":          symbol,
         "f_score":         total,
-        "interpretation":  interp,
+        "interpretation":  interpret_f_score(total),
         "component_scores": scores,
         "details":         details,
     }
@@ -641,6 +543,31 @@ def display_piotroski_score(result: dict):
 # SCAN 3 — COFFEE CAN PORTFOLIO SCREEN  (yfinance financial statements)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _roce_criterion(inc, bal) -> tuple:
+    """Coffee Can C2: ROCE > 15% on average; ROCE = EBIT / (Total Assets - Current Liabilities)."""
+    ebit_s = series(inc, "EBIT", "Operating Income", "Ebit")
+    ta_s   = series(bal, "Total Assets")
+    cl_s   = series(bal, "Current Liabilities", "Total Current Liabilities")
+    roce_list = []
+    for i in range(min(len(ebit_s), len(ta_s), len(cl_s))):
+        cap_emp = ta_s[i] - cl_s[i]
+        if cap_emp > 0:
+            roce_list.append(ebit_s[i] / cap_emp * 100)
+    if not roce_list:
+        return {"C2_ROCE_gt15": 0}, {"ROCE_avg_%": "N/A"}
+    avg_roce = sum(roce_list) / len(roce_list)
+    return ({"C2_ROCE_gt15": 1 if avg_roce > 15 else 0},
+            {"ROCE_avg_%": round(avg_roce, 2), "ROCE_min_%": round(min(roce_list), 2),
+             "ROCE_years": len(roce_list)})
+
+
+def _market_cap_criterion(info: dict) -> tuple:
+    """Coffee Can C4: market cap of at least 500 crore rupees (1 crore = 1e7)."""
+    mcap_cr = info.get("marketCap") / 1e7 if info.get("marketCap") else None
+    return ({"C4_MCap_ge500Cr": 1 if (mcap_cr and mcap_cr >= 500) else 0},
+            {"Market_Cap_Cr": round(mcap_cr, 2) if mcap_cr else "N/A"})
+
+
 def compute_coffee_can(symbol: str) -> dict:
     """
     Coffee Can Portfolio screen for Indian equities.
@@ -675,94 +602,22 @@ def compute_coffee_can(symbol: str) -> dict:
     if inc is None or inc.empty:
         return {"error": f"No data for {yf_sym} on Yahoo Finance"}
 
-    def series(df, *rows):
-        """Return a list of floats for the first matching row (most recent first)."""
-        for name in rows:
-            if df is not None and name in df.index:
-                return [float(v) for v in df.loc[name].dropna() if pd.notna(v)]
-        return []
-
-    criteria = {}
-    details  = {}
-
-    # ── C1: Revenue CAGR > 10% ───────────────────────────────────────────────
-    revs = series(inc, "Total Revenue")
-    if len(revs) >= 2:
-        # revs[0] = most recent, revs[-1] = oldest
-        years = len(revs) - 1
-        cagr  = ((revs[0] / revs[-1]) ** (1 / years) - 1) * 100 if revs[-1] > 0 else None
-        criteria["C1_RevenuCAGR_gt10"]  = 1 if (cagr and cagr > 10) else 0
-        details["Revenue_CAGR_%"]       = round(cagr, 2) if cagr else "N/A"
-        details["Revenue_years"]        = years
-    else:
-        criteria["C1_RevenuCAGR_gt10"]  = 0
-        details["Revenue_CAGR_%"]       = "N/A"
-
-    # ── C2: ROCE > 15% (average across available years) ──────────────────────
-    # ROCE = EBIT / Capital Employed;  Capital Employed = Total Assets − Current Liabilities
-    ebit_s  = series(inc, "EBIT", "Operating Income", "Ebit")
-    ta_s    = series(bal, "Total Assets")
-    cl_s    = series(bal, "Current Liabilities", "Total Current Liabilities")
-
-    roce_list = []
-    for i in range(min(len(ebit_s), len(ta_s), len(cl_s))):
-        cap_emp = ta_s[i] - cl_s[i]
-        if cap_emp > 0:
-            roce_list.append(ebit_s[i] / cap_emp * 100)
-
-    if roce_list:
-        avg_roce = sum(roce_list) / len(roce_list)
-        criteria["C2_ROCE_gt15"]  = 1 if avg_roce > 15 else 0
-        details["ROCE_avg_%"]     = round(avg_roce, 2)
-        details["ROCE_min_%"]     = round(min(roce_list), 2)
-        details["ROCE_years"]     = len(roce_list)
-    else:
-        criteria["C2_ROCE_gt15"]  = 0
-        details["ROCE_avg_%"]     = "N/A"
-
-    # ── C3: Debt/Equity < 1 ──────────────────────────────────────────────────
-    # yfinance info.debtToEquity is in percent in some builds (45.2 = 0.452×).
-    de_raw = info.get("debtToEquity")
-    if de_raw is not None:
-        de = de_raw / 100 if de_raw > 10 else de_raw   # normalise if needed
-        criteria["C3_LowDebt"]    = 1 if de < 1 else 0
-        details["Debt_to_Equity"] = round(de, 2)
-    else:
-        # Compute from balance sheet directly
-        ltd_s = series(bal, "Long Term Debt")
-        eq_s  = series(bal, "Stockholders Equity", "Total Stockholder Equity",
-                       "Total Equity Gross Minority Interest")
-        if ltd_s and eq_s and eq_s[0] != 0:
-            de = ltd_s[0] / eq_s[0]
-            criteria["C3_LowDebt"]    = 1 if de < 1 else 0
-            details["Debt_to_Equity"] = round(de, 2)
-        else:
-            criteria["C3_LowDebt"]    = 0
-            details["Debt_to_Equity"] = "N/A"
-
-    # ── C4: Market Cap ≥ ₹500 Cr ─────────────────────────────────────────────
-    mcap     = info.get("marketCap")
-    mcap_cr  = mcap / 1e7 if mcap else None   # convert to crores
-    criteria["C4_MCap_ge500Cr"]  = 1 if (mcap_cr and mcap_cr >= 500) else 0
-    details["Market_Cap_Cr"]     = round(mcap_cr, 2) if mcap_cr else "N/A"
-
-    # ── C5: No loss year ─────────────────────────────────────────────────────
-    ni_s = series(inc, "Net Income")
-    if ni_s:
-        all_profit = all(n > 0 for n in ni_s)
-        criteria["C5_NoProfitLoss"]  = 1 if all_profit else 0
-        details["Loss_years"]        = sum(1 for n in ni_s if n <= 0)
-        details["Years_analysed"]    = len(ni_s)
-    else:
-        criteria["C5_NoProfitLoss"]  = 0
+    criteria, details = revenue_cagr_criterion(inc, "C1_RevenuCAGR_gt10")
+    for crit, det in (
+        _roce_criterion(inc, bal),
+        debt_to_equity_criterion(info, bal, series(bal, "Stockholders Equity", "Total Stockholder Equity",
+                                                   "Total Equity Gross Minority Interest"), abs_equity=False),
+        _market_cap_criterion(info),
+        no_loss_year_criterion(series(inc, "Net Income")),
+    ):
+        criteria.update(crit)
+        details.update(det)
 
     total    = sum(criteria.values())
     max_pts  = len(criteria)
-    qualifies = total == max_pts
-
     return {
         "symbol":     symbol,
-        "qualifies":  qualifies,
+        "qualifies":  total == max_pts,
         "score":      f"{total}/{max_pts}",
         "criteria":   criteria,
         "details":    details,

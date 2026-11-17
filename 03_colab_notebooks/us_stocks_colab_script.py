@@ -458,6 +458,13 @@ def compute_darvas_box(df: pd.DataFrame, confirm: int = DARVAS_CONFIRM) -> dict:
         return {"signal": "INSUFFICIENT_DATA", "box_top": None, "box_bottom": None,
                 "note": f"Could not identify OHLC columns in {list(df.columns)}"}
 
+    # A missing or zero close is not a price: drop the bar, never zero-fill it
+    # (a 0.0 "current price" reads as BREAKDOWN_SELL for the whole universe).
+    _close = pd.to_numeric(df[c_col], errors="coerce")
+    df = df[_close.notna() & (_close > 0)]
+    if len(df) < confirm + 5:
+        return {"signal": "INSUFFICIENT_DATA", "box_top": None, "box_bottom": None}
+
     highs  = pd.to_numeric(df[h_col], errors="coerce").fillna(0).tolist()
     lows   = pd.to_numeric(df[l_col], errors="coerce").fillna(0).tolist()
     closes = pd.to_numeric(df[c_col], errors="coerce").fillna(0).tolist()

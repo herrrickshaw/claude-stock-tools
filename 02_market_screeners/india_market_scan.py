@@ -220,6 +220,13 @@ def compute_darvas_box(df: pd.DataFrame, confirm: int = DARVAS_CONFIRM) -> dict:
     if not all([h_col, l_col, c_col]) or len(df) < confirm + 5:
         return {"signal": "INSUFFICIENT_DATA", "box_top": None, "box_bottom": None}
 
+    # A missing or zero close is not a price: drop the bar, never zero-fill it
+    # (a 0.0 "current price" reads as BREAKDOWN_SELL for the whole universe).
+    _close = pd.to_numeric(df[c_col], errors="coerce")
+    df = df[_close.notna() & (_close > 0)]
+    if len(df) < confirm + 5:
+        return {"signal": "INSUFFICIENT_DATA", "box_top": None, "box_bottom": None}
+
     all_highs  = pd.to_numeric(df[h_col], errors="coerce").fillna(0).tolist()
     all_lows   = pd.to_numeric(df[l_col], errors="coerce").fillna(0).tolist()
     all_closes = pd.to_numeric(df[c_col], errors="coerce").fillna(0).tolist()
@@ -344,7 +351,7 @@ def fundamental_scan(symbol: str, yf_suffix: str = ".NS") -> dict:
     f6 = 1 if (ca0 and cl0 and ca1 and cl1 and (ca0/cl0) > (ca1/cl1)) else 0
 
     sh0 = _row(bal, "Share Issued", col=0);  sh1 = _row(bal, "Share Issued", col=1)
-    f7 = (1 if sh0 <= sh1 else 0) if (sh0 and sh1) else 1
+    f7 = (1 if sh0 <= sh1 else 0) if (sh0 and sh1) else 0   # no share data: no point
 
     rev0 = _row(inc, "Total Revenue", col=0);  gp0 = _row(inc, "Gross Profit", col=0)
     rev1 = _row(inc, "Total Revenue", col=1);  gp1 = _row(inc, "Gross Profit", col=1)
@@ -394,6 +401,16 @@ def fundamental_scan(symbol: str, yf_suffix: str = ".NS") -> dict:
 
     ni_s = series(inc, "Net Income")
     c["C5"] = 1 if (ni_s and all(n > 0 for n in ni_s)) else 0
+
+    # C6: positive free cash flow in the most recent year (README criterion 6;
+    # same rule as the JP/KR/EU/US scanners)
+    fcf_s = series(cf, "Free Cash Flow")
+    if fcf_s:
+        c["C6"] = 1 if fcf_s[0] > 0 else 0
+    else:
+        ocf_s   = series(cf, "Operating Cash Flow")
+        capex_s = series(cf, "Capital Expenditure")
+        c["C6"] = 1 if (ocf_s and capex_s and (ocf_s[0] - abs(capex_s[0])) > 0) else 0
 
     cc_total  = sum(c.values())
     qualifies = cc_total == len(c)

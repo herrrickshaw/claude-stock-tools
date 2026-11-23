@@ -249,3 +249,29 @@ def test_print_analysis_output(mk, capsys):
     assert "Moat Strength: 4.8/5.0 (STRONG MOAT)" in out
     assert "MARGIN STABILITY" in out and "★" in out
     assert "→ Margins rock-solid" in out
+
+
+def test_roe_strength_scale(mk):
+    # strength = int(avg ROE * 33): 16% -> 5 (5.28), 12% -> 3 (3.96), 9% -> 2 (2.97)
+    for ni, strength in ((16, 5), (12, 3), (9, 2)):
+        inc, bal = roe_frames([ni] * 4, [100] * 4)
+        assert mk(fi=inc, bs=bal).analyze_roe_consistency().strength == strength
+
+
+def _company(cogs, ni, assets, mcap, info_extra=None):
+    inc = fi([{"Total Revenue": 100, "Cost of Revenue": cogs, "Net Income": ni}] * 3)
+    bal = fi([{"Total Equity": 100, "Total Assets": assets}] * 3)
+    return inc, bal, dict({"marketCap": mcap}, **(info_extra or {}))
+
+
+def test_overall_signal_vote_thresholds(mk):
+    # exactly three BUY (margin, ROE, market) and nothing to avoid -> STRONG
+    inc, bal, info = _company(cogs=50, ni=30, assets=60, mcap=200)
+    res = mk(info=info, fi=inc, bs=bal).run_analysis()
+    assert [i.signal for i in res["indicators"]] == ["BUY", "BUY", "BUY", "HOLD", "NEUTRAL"]
+    assert res["overall_signal"] == "STRONG MOAT"
+    # exactly two AVOID (ROE, market) and two BUY -> WEAK
+    inc, bal, info = _company(cogs=50, ni=1, assets=40, mcap=5000)
+    res = mk(info=info, fi=inc, bs=bal).run_analysis()
+    assert [i.signal for i in res["indicators"]] == ["BUY", "AVOID", "AVOID", "BUY", "NEUTRAL"]
+    assert res["overall_signal"] == "WEAK MOAT"

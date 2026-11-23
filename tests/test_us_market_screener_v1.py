@@ -2,7 +2,6 @@
 import sqlite3
 import types
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -387,3 +386,15 @@ def test_main_resume_skips_completed_fundamentals(v1, wired):
     wired["fund"].clear()
     v1.main(resume=True, workers=1, delay=0)
     assert wired["fund"] == []
+
+
+def test_darvas_close_equal_to_box_top_is_still_in_box(v1):
+    highs = [105.0] * 10 + [110.0] + [105.0] * 9
+    closes = [100.0] * 19 + [110.0]
+    df = pd.DataFrame({"Open": closes, "High": highs, "Low": [95.0] * 20, "Close": closes, "Volume": 1},
+                      index=pd.bdate_range("2026-01-01", periods=20))
+    r = v1._darvas_from_df(df)
+    assert r["box_top"] == 110.0 and r["box_bottom"] == 95.0
+    assert r["signal"] == "IN_BOX"                      # strictly above the top is required to break out
+    df.iloc[-1, df.columns.get_loc("Close")] = 110.01
+    assert v1._darvas_from_df(df)["signal"] == "BREAKOUT_BUY"

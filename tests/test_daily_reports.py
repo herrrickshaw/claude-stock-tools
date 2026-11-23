@@ -133,7 +133,7 @@ def test_pct(mods, kind):
 
 @pytest.mark.parametrize("kind,prefix", [("us", "$"), ("sg", "S$")])
 @pytest.mark.parametrize("value,expected", [
-    (4.48e12, "4.48T"), (1e12, "1.00T"), (999e9, "999.00B"), (1e9, "1.00B"),
+    (4.48e12, "4.48T"), (1e12, "1.00T"), (999e9, "999.00B"), (1e9, "1.00B"), (999_999_999, "1000.00M"),
     (182.5e6, "182.50M"), (1e6, "1.00M"), (12_345, "12.35K"), (1e3, "1.00K"),
     (999, "999.00"), (-2.5e9, "-2.50B"),
 ])
@@ -395,6 +395,17 @@ def test_coffee_can_debt_to_equity_fallbacks(mods, monkeypatch, kind):
     t4 = ticker()
     t4.info = {"marketCap": 1e10, "debtToEquity": 10.5}             # > 10 is a percentage
     assert reach(mods, monkeypatch, kind, t4)["details"]["Debt_to_Equity"] == 0.1
+
+
+@pytest.mark.parametrize("kind", ["india", "us"])
+def test_coffee_can_debt_to_equity_boundaries(mods, monkeypatch, kind):
+    # 10 is still a plain ratio (fails D/E < 1); only values above 10 are read as percentages.
+    for raw, de, expected in ((10, 10, 0), (1.0, 1.0, 0), (0.99, 0.99, 1), (100.0, 1.0, 0), (99.0, 0.99, 1)):
+        t = ticker()
+        t.info = {"marketCap": 1e10, "debtToEquity": raw}
+        r = reach(mods, monkeypatch, kind, t)
+        assert r["details"]["Debt_to_Equity"] == de
+        assert r["criteria"]["C3_LowDebt"] == expected
 
 
 def test_us_coffee_can_fcf_rules(mods, monkeypatch):

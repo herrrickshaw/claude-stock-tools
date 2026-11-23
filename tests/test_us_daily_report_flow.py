@@ -1,6 +1,5 @@
 """us_daily_report: yfinance fetch helpers, console displays, run / run_batch / summary CSV / scans-only."""
 import json
-import types
 
 import pandas as pd
 import pytest

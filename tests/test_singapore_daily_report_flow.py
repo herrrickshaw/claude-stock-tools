@@ -350,7 +350,7 @@ def test_excel_report_with_scans(sg):
     assert [c.value for c in ws[1]][11:] == ["Darvas Signal", "Darvas Top", "Darvas Bottom", "Piotroski Score",
                                               "PEGY Ratio", "Breakout Signal"]
     assert [c.value for c in ws[2]][11:] == ["BREAKOUT_BUY", 9.0, 7.0, 8, 5.1, "Above"]
-    assert [c.value for c in ws[3]][11:] == ["", None, None, None, None, ""]      # symbol with no scan data
+    assert [c.value for c in ws[3]][11:] == [None] * 6      # no scan data (empty strings read back as blank cells)
     d = wb["D05"]
     cells = {d.cell(row=r, column=1).value: d.cell(row=r, column=2).value for r in range(1, d.max_row + 1)}
     assert cells["Signal"] == "BREAKOUT_BUY" and cells["Box Top"] == 9.0

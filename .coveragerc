@@ -1,0 +1,20 @@
+# 03_colab_notebooks/ is omitted: it is a Google Colab export of the daily report + US screener (run via
+# exec(open(...).read())); its logic is a copy of us_daily_report.py / us_market_screener_v1.py, which are measured.
+[run]
+source =
+    01_daily_reports
+    02_market_screeners
+    04_strategy_reference
+    05_enrichment
+omit =
+    tests/*
+    */conftest.py
+    */test_*.py
+    notebooks/*
+    .github/*
+    03_colab_notebooks/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:

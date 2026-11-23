@@ -853,3 +853,119 @@ def test_korea_main_cap_boundary(kr, monkeypatch, capsys):
     kr.mod.main()
     assert "capped" not in capsys.readouterr().out
     assert sorted(c for c, _ in kr.fund_calls) == ["005930", "035720"]
+
+
+# ---------------------------------------------------------------------------------------
+# boundaries added after the first mutation run
+# ---------------------------------------------------------------------------------------
+
+def test_india_main_exactly_at_cap_is_not_filtered(india, monkeypatch, capsys):
+    monkeypatch.setattr(india.mod, "MAX_FUND_CANDIDATES", 2)
+    india.nse, india.bse = ["AAA", "BBB"], []
+    india.ohlc = {"AAA.NS": ohlc(13.0), "BBB.NS": ohlc(10.5)}
+    india.mod.main()
+    assert sorted(s for s, _ in india.fund_calls) == ["AAA", "BBB"]
+    assert "pre-filtered" not in capsys.readouterr().out
+
+
+def test_japan_main_exactly_at_cap_is_not_filtered(jp, monkeypatch, capsys):
+    argv(monkeypatch)
+    monkeypatch.setattr(jp.mod, "MAX_FUND_CANDIDATES", 2)
+    jp.ohlc = {"7203.T": ohlc(13.0, n=40), "6758.T": ohlc(10.5, n=40)}
+    jp.mod.main()
+    assert sorted(jp.fund_calls) == ["6758.T", "7203.T"]
+    assert "capped" not in capsys.readouterr().out
+
+
+def trend_series(n, last, low_bar, high_bar=None):
+    """n bars whose 200-bar mean is exactly 1000: 198 x 1000, one bar of low_bar, last bar = last."""
+    closes = [1000.0] * (n - 2) + [low_bar, last]
+    df = ohlc(last, n=n)
+    df["Close"] = closes
+    df["High"] = [1010.0] * (n - 1) + [max(last, 1010.0)]
+    df["Low"] = [990.0] * n
+    return df
+
+
+@pytest.mark.parametrize("last,low_bar,expect", [
+    (1050.0, 950.0, "Near 200MA (Consolidation)"),     # exactly +5% is not "above"
+    (950.0, 1050.0, "Near 200MA (Consolidation)"),     # exactly -5% is not "below"
+    (1051.0, 949.0, "Above 200MA (Uptrend)"),
+    (949.0, 1051.0, "Below 200MA (Downtrend)"),
+])
+def test_trend_bucket_boundaries_with_exactly_200_bars(eu, jp, kr, monkeypatch, last, low_bar, expect):
+    argv(monkeypatch, "--no-scans")
+    for st, tick in ((eu, "SAP.DE"), (jp, "7203.T"), (kr, "005930")):
+        n = 200                                           # the first length that has a 200-day mean
+        df = trend_series(n, last, low_bar)
+        st.ohlc = {tick: df}
+        st.universe = st.universe[:1]
+        st.mod.main()
+        book, path = one_book(st.dir)
+        row = book["All_Stocks"].iloc[0]
+        assert row["Trend_Signal"] == expect, tick
+        assert row["200_Day_MA"] == 1000.0
+        path.unlink()
+
+
+def test_trend_needs_200_bars(eu, monkeypatch):
+    argv(monkeypatch, "--no-scans")
+    eu.universe = eu.universe[:1]
+    eu.ohlc = {"SAP.DE": trend_series(199, 1050.0, 950.0)}
+    eu.mod.main()
+    book, _ = one_book(eu.dir)
+    row = book["All_Stocks"].iloc[0]
+    assert pd.isna(row["200_Day_MA"]) and row["Trend_Signal"] == "Insufficient History"
+
+
+def many_breakouts(n):
+    return {f"S{i:02d}": ohlc(12.0, n=40) for i in range(n)}
+
+
+def progress_lines(text):
+    return [ln.split()[0] for ln in text.splitlines() if ln.strip().endswith(")") and " done" in ln]
+
+
+def test_europe_progress_every_25(eu, monkeypatch, capsys):
+    argv(monkeypatch, "--workers", "1")
+    names = [f"S{i:02d}.PA" for i in range(26)]
+    eu.universe = [{"ticker": t, "name": t, "country": "FR", "sector": "x", "exchange": "P", "mcap_b": 1.0,
+                    "cap_band": "c"} for t in names]
+    eu.ohlc = {t: ohlc(12.0, n=40) for t in names}
+    eu.mod.main()
+    assert progress_lines(capsys.readouterr().out) == ["25/26", "26/26"]
+
+
+def test_japan_progress_every_20(jp, monkeypatch, capsys):
+    argv(monkeypatch, "--workers", "1")
+    names = [f"{1000 + i}.T" for i in range(21)]
+    jp.universe = [{"yf_ticker": t, "code": t[:4], "name": t, "sector": "x"} for t in names]
+    jp.ohlc = {t: ohlc(12.0, n=40) for t in names}
+    jp.mod.main()
+    assert progress_lines(capsys.readouterr().out) == ["20/21", "21/21"]
+
+
+def test_korea_progress_every_20(kr, monkeypatch, capsys):
+    argv(monkeypatch, "--workers", "1")
+    codes = [f"{100000 + i}" for i in range(21)]
+    kr.universe = [{"code": c, "name": c, "sector": "x", "market": "KOSPI", "yf_suffix": ".KS"} for c in codes]
+    kr.ohlc = {c: ohlc(12.0, n=40) for c in codes}
+    kr.mod.main()
+    assert progress_lines(capsys.readouterr().out) == ["20/21", "21/21"]
+
+
+@pytest.mark.parametrize("which", ["jp", "kr"])
+def test_yen_and_won_prices_are_rounded_to_whole_units(which, jp, kr, monkeypatch):
+    argv(monkeypatch, "--no-scans")
+    st = jp if which == "jp" else kr
+    tick = "7203.T" if which == "jp" else "005930"
+    df = ohlc(12.0, n=40)
+    df["Close"] = [8.5] * 38 + [1199.6, 1200.4]
+    df["High"] = [9.0] * 39 + [1300.0]
+    st.ohlc = {tick: df}
+    st.universe = st.universe[:1]
+    st.mod.main()
+    book, _ = one_book(st.dir)
+    row = book["All_Stocks"].iloc[0]
+    assert row["LTP_JPY" if which == "jp" else "LTP_KRW"] == 1200.0           # 1200.4 -> 1200, not 1200.4
+    assert row["Change%"] == round((1200.0 - 1200.0) / 1200.0 * 100, 2)        # prev 1199.6 -> 1200

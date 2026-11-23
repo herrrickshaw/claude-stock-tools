@@ -184,6 +184,16 @@ def test_coffee_can_c1_revenue_cagr_threshold(v1):
     assert v1.run_coffee_can(zero_base)["criteria"]["C1"] == 0                                         # non-positive base
 
 
+def test_coffee_can_c2_roe_threshold_and_zero_equity(v1):
+    exactly = cc_ticker(**{"Net Income": [150.0] * 4, "Stockholders Equity": [1000.0] * 4})      # ROE exactly 15%
+    assert v1.run_coffee_can(exactly)["criteria"]["C2"] == 0
+    above = cc_ticker(**{"Net Income": [151.0] * 4, "Stockholders Equity": [1000.0] * 4})
+    assert v1.run_coffee_can(above)["criteria"]["C2"] == 1
+    zero_year = cc_ticker(**{"Stockholders Equity": [1000.0, 0.0, 800.0, 700.0]})               # must not divide by 0
+    r = v1.run_coffee_can(zero_year)
+    assert r["criteria"]["C2"] == 1 and r["error"] is None
+
+
 def test_coffee_can_c2_roe(v1):
     low = cc_ticker(**{"Net Income": [100.0, 100.0, 100.0, 100.0]})                  # ROE ~ 12%
     assert v1.run_coffee_can(low)["criteria"]["C2"] == 0

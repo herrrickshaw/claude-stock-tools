@@ -280,6 +280,24 @@ def test_us_fetch_nasdaq_ncds_empty_falls_back_to_ftp(us, monkeypatch, capsys):
     assert "NCDS returned no NASDAQ symbols" in capsys.readouterr().out
 
 
+def test_us_ncds_not_consulted_when_sdk_missing(us, monkeypatch):
+    monkeypatch.setattr(us, "_NCDS_AVAILABLE", False)
+    monkeypatch.setattr(us, "fetch_symbols_from_ncds", lambda: pytest.fail("NCDS must not be called"))
+    monkeypatch.setattr(us, "_fetch_nasdaq_file", lambda f: NASDAQ_TXT)
+    assert us.fetch_nasdaq_symbols() == ["AAPL", "ABCDE"]
+    assert us._ncds_symbol_cache == {}
+
+
+def test_us_ncds_is_queried_only_once(us, monkeypatch):
+    consumer = FakeConsumer([[AttrMsg(dir_msg("aa", "Q"))]])
+    install_ncds(us, monkeypatch, consumer)
+    assert us.fetch_nasdaq_symbols() == ["AA"]
+    calls = consumer.calls
+    monkeypatch.setattr(us, "_fetch_nasdaq_file", lambda f: NASDAQ_TXT)
+    assert us.fetch_nasdaq_symbols() == ["AAPL", "ABCDE"]        # cache now populated -> straight to FTP
+    assert consumer.calls == calls
+
+
 def test_us_fetch_nasdaq_ftp_then_sec(us, monkeypatch, capsys):
     monkeypatch.setattr(us, "_NCDS_AVAILABLE", False)
     files = []
@@ -864,7 +882,8 @@ def test_korea_fetch_krx_ohlc_progress_every_200(kr, monkeypatch, capsys):
     monkeypatch.setattr(kr, "krx", types.SimpleNamespace(get_market_ohlcv_by_date=lambda f, t, c: krx_frame(10)))
     monkeypatch.setattr(kr.time, "sleep", lambda s: None)
     kr.fetch_krx_ohlc([{"code": f"{i:06d}"} for i in range(200)])
-    assert "200/200 fetched (200 usable)" in capsys.readouterr().out
+    lines = [ln.strip() for ln in capsys.readouterr().out.splitlines() if "fetched (" in ln]
+    assert lines == ["200/200 fetched (200 usable) …"]                   # one progress line, at ticker 200
 
 
 # ---------------------------------------------------------------------------------------
